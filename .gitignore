@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.conda/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+bcl_parser.log
+
+# Temporary files
+*.tmp
+*.temp
+COMMIT_MESSAGE.txt
+
+# OAuth tokens and credentials (sensitive)
+src/sheets/token.json
+src/sheets/credentials.json
+src/sheets/service_account.json
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Screenshots and debug images
+*.png
+!README*.png
+!docs/**/*.png
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Note: .env file is intentionally NOT ignored - it should be in repository
