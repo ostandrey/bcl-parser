@@ -176,7 +176,33 @@ class YouScanParser:
             # Navigate to login page
             logger.info(f"Navigating to {self.BASE_URL}/login")
             print(f"[INFO] Navigating to {self.BASE_URL}/login")
-            await self.page.goto(f"{self.BASE_URL}/login", wait_until='load', timeout=60000)
+            # Use 'domcontentloaded' instead of 'load' - faster and more reliable
+            # 'load' waits for all resources, which can timeout on slow networks
+            try:
+                await self.page.goto(f"{self.BASE_URL}/login", wait_until='domcontentloaded', timeout=60000)
+            except Exception as goto_error:
+                # If timeout, try with even less strict wait or check if page loaded anyway
+                logger.warning(f"Initial navigation timed out: {goto_error}, checking current URL")
+                print(f"[WARNING] Initial navigation timed out, checking current URL")
+                current_url = self.page.url
+                logger.info(f"Current URL after timeout: {current_url}")
+                print(f"[INFO] Current URL after timeout: {current_url}")
+                
+                # If we're already on a valid page (themes, dashboard), continue
+                if '/themes' in current_url or '/dashboard' in current_url or current_url != 'about:blank':
+                    logger.info("Page loaded despite timeout, continuing")
+                    print("[INFO] Page loaded despite timeout, continuing")
+                else:
+                    # Try one more time with 'commit' wait (least strict)
+                    try:
+                        logger.info("Retrying navigation with 'commit' wait")
+                        print("[INFO] Retrying navigation with 'commit' wait")
+                        await self.page.goto(f"{self.BASE_URL}/login", wait_until='commit', timeout=30000)
+                        await asyncio.sleep(2)  # Wait for page to render
+                    except Exception as retry_error:
+                        logger.error(f"Navigation failed even with retry: {retry_error}")
+                        print(f"[ERROR] Navigation failed even with retry: {retry_error}")
+                        raise
             
             # Check current URL - might already be logged in
             current_url = self.page.url
@@ -324,16 +350,71 @@ class YouScanParser:
             if not password_input:
                 raise ValueError("Could not find password input field on login page")
             
+            # Double-check we're still on login page before filling (redirect might have happened)
+            final_check_url = self.page.url
+            if '/themes' in final_check_url or '/dashboard' in final_check_url or '/login' not in final_check_url:
+                logger.info(f"Redirected to {final_check_url} before filling form - already logged in!")
+                print(f"[INFO] Redirected to {final_check_url} before filling form - already logged in!")
+                await self._navigate_to_big_city_lab_async()
+                return
+            
+            # Verify elements are still attached to DOM before filling
+            try:
+                # Check if email input is still attached
+                is_attached = await email_input.evaluate('el => el.isConnected')
+                if not is_attached:
+                    # Re-query the element
+                    email_input = await self.page.query_selector('input[name="username"]')
+                    if not email_input:
+                        raise ValueError("Email input was detached from DOM")
+                
+                # Check if password input is still attached
+                is_attached = await password_input.evaluate('el => el.isConnected')
+                if not is_attached:
+                    # Re-query the element
+                    password_input = await self.page.query_selector('input[name="password"]')
+                    if not password_input:
+                        raise ValueError("Password input was detached from DOM")
+            except Exception as e:
+                # Check URL again - might have redirected
+                check_url = self.page.url
+                if '/themes' in check_url or '/dashboard' in check_url:
+                    logger.info(f"Redirected to {check_url} during element check - already logged in!")
+                    print(f"[INFO] Redirected to {check_url} during element check - already logged in!")
+                    await self._navigate_to_big_city_lab_async()
+                    return
+                raise ValueError(f"Elements detached from DOM: {e}")
+            
             # Fill credentials
             logger.info("Filling email")
             print("[INFO] Filling email")
-            await email_input.fill(self.email)
-            await asyncio.sleep(0.5)
+            try:
+                await email_input.fill(self.email)
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                # Check if redirected during fill
+                check_url = self.page.url
+                if '/themes' in check_url or '/dashboard' in check_url:
+                    logger.info(f"Redirected to {check_url} during email fill - already logged in!")
+                    print(f"[INFO] Redirected to {check_url} during email fill - already logged in!")
+                    await self._navigate_to_big_city_lab_async()
+                    return
+                raise ValueError(f"Failed to fill email: {e}")
             
             logger.info("Filling password")
             print("[INFO] Filling password")
-            await password_input.fill(self.password)
-            await asyncio.sleep(0.5)
+            try:
+                await password_input.fill(self.password)
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                # Check if redirected during fill
+                check_url = self.page.url
+                if '/themes' in check_url or '/dashboard' in check_url:
+                    logger.info(f"Redirected to {check_url} during password fill - already logged in!")
+                    print(f"[INFO] Redirected to {check_url} during password fill - already logged in!")
+                    await self._navigate_to_big_city_lab_async()
+                    return
+                raise ValueError(f"Failed to fill password: {e}")
             
             # Submit form - button contains text "Увійти"
             logger.info("Looking for submit button")
@@ -439,6 +520,12 @@ class YouScanParser:
                     await theme_locator.click()
                     theme_clicked = True
                     await asyncio.sleep(3)
+                    
+                    # After clicking, navigate directly to mentions page
+                    logger.info("Navigating to mentions page after clicking theme")
+                    print("[INFO] Navigating to mentions page after clicking theme")
+                    await self.page.goto(self.MENTIONS_URL, wait_until='load', timeout=30000)
+                    await asyncio.sleep(2)
             except Exception as e:
                 logger.debug(f"get_by_text failed: {e}")
                 print(f"[DEBUG] get_by_text failed: {e}")
@@ -505,24 +592,33 @@ class YouScanParser:
                 await self.page.goto(self.MENTIONS_URL, wait_until='load', timeout=30000)
                 await asyncio.sleep(3)
             else:
-                # After clicking, check if we need to navigate to mentions
+                # After clicking, always navigate directly to mentions page
                 current_url = self.page.url
                 logger.info(f"URL after clicking theme: {current_url}")
                 print(f"[INFO] URL after clicking theme: {current_url}")
                 
-                # If we're on theme page but not mentions, navigate to mentions
-                if '/themes/347025' in current_url and '/mentions' not in current_url:
-                    logger.info("On theme page, navigating to mentions")
-                    print("[INFO] On theme page, navigating to mentions")
-                    await self.page.goto(self.MENTIONS_URL, wait_until='load', timeout=30000)
-                    await asyncio.sleep(3)
+                # Always navigate to mentions page after clicking theme
+                logger.info("Navigating to mentions page")
+                print("[INFO] Navigating to mentions page")
+                await self.page.goto(self.MENTIONS_URL, wait_until='load', timeout=30000)
+                await asyncio.sleep(2)
             
             # Verify we're on the mentions page
             final_url = self.page.url
             logger.info(f"Final URL: {final_url}")
             print(f"[INFO] Final URL: {final_url}")
             
-            if '/mentions' in final_url or '/themes/347025' in final_url:
+            # If we're still on themes page (not mentions), navigate directly
+            if '/themes' in final_url and '/mentions' not in final_url:
+                logger.warning(f"Still on themes page ({final_url}), navigating directly to mentions")
+                print(f"[WARNING] Still on themes page ({final_url}), navigating directly to mentions")
+                await self.page.goto(self.MENTIONS_URL, wait_until='load', timeout=30000)
+                await asyncio.sleep(2)
+                final_url = self.page.url
+                logger.info(f"Final URL after direct navigation: {final_url}")
+                print(f"[INFO] Final URL after direct navigation: {final_url}")
+            
+            if '/mentions' in final_url:
                 logger.info("Successfully navigated to Big City Lab mentions page")
                 print("[INFO] Successfully navigated to Big City Lab mentions page")
             else:
@@ -689,11 +785,16 @@ class YouScanParser:
         import logging
         logger = logging.getLogger(__name__)
         
-        # Navigate to mentions page
-        logger.info(f"Navigating to mentions page for date range: {date_from} to {date_to}")
-        print(f"[INFO] Navigating to mentions page for date range: {date_from} to {date_to}")
-        await self.page.goto(self.MENTIONS_URL, wait_until='load', timeout=30000)
-        await asyncio.sleep(2)
+        # Only navigate if we're not already on the mentions page
+        current_url = self.page.url
+        if 'mentions' not in current_url.lower():
+            logger.info(f"Navigating to mentions page for date range: {date_from} to {date_to}")
+            print(f"[INFO] Navigating to mentions page for date range: {date_from} to {date_to}")
+            await self.page.goto(self.MENTIONS_URL, wait_until='load', timeout=30000)
+            await asyncio.sleep(2)
+        else:
+            logger.debug("Already on mentions page, skipping navigation")
+            print(f"[DEBUG] Already on mentions page, skipping navigation")
         
         # Check if page is still open
         if self.page.is_closed():
@@ -837,28 +938,63 @@ class YouScanParser:
             logger.info(f"Setting date range: {date_from} to {date_to}")
             print(f"[INFO] Setting date range: {date_from} to {date_to}")
             
-            # Format date range as "YYYY-MM-DD - YYYY-MM-DD"
-            date_range_str = f"{date_from.strftime('%Y-%m-%d')} - {date_to.strftime('%Y-%m-%d')}"
-            logger.info(f"Typing date range: {date_range_str}")
-            print(f"[INFO] Typing date range: {date_range_str}")
+            # IMPORTANT: The website interprets dates in UTC, but the browser timezone is set to 'America/New_York'
+            # This causes a -1 day offset. To compensate, we add 1 day to the dates before typing them.
+            # When the website receives "2026-01-02", it interprets it as UTC, which becomes "2026-01-01" in the browser's timezone
+            from datetime import timedelta
+            adjusted_date_from = date_from + timedelta(days=1)
+            adjusted_date_to = date_to + timedelta(days=1)
+            
+            # Format date range as "YYYY-MM-DD - YYYY-MM-DD" (with timezone compensation)
+            date_range_str = f"{adjusted_date_from.strftime('%Y-%m-%d')} - {adjusted_date_to.strftime('%Y-%m-%d')}"
+            logger.info(f"Typing date range (with +1 day timezone compensation): {date_range_str}")
+            print(f"[INFO] Typing date range (with +1 day timezone compensation): {date_range_str}")
             
             # Focus the input
             await date_input.focus()
             await asyncio.sleep(0.3)
             
-            # Clear the input (select all and delete)
+            # Clear the input more thoroughly
+            # Method 1: Select all and delete
             await date_input.click(click_count=3)  # Triple click to select all
             await asyncio.sleep(0.2)
             await date_input.press('Backspace')
             await asyncio.sleep(0.2)
             
-            # Alternative: Use JavaScript to clear and set value
-            await date_input.evaluate('el => el.value = ""')
+            # Method 2: Use JavaScript to clear value
+            await date_input.evaluate('el => { el.value = ""; el.dispatchEvent(new Event("input", { bubbles: true })); }')
+            await asyncio.sleep(0.3)
+            
+            # Method 3: Clear via keyboard (Ctrl+A, Delete)
+            await date_input.press('Control+a')
+            await asyncio.sleep(0.1)
+            await date_input.press('Delete')
             await asyncio.sleep(0.2)
+            
+            # Verify input is clear - try multiple times if needed
+            for clear_attempt in range(3):
+                current_value = await date_input.input_value()
+                if not current_value or not current_value.strip():
+                    break
+                logger.debug(f"Input still has value after clearing (attempt {clear_attempt + 1}): '{current_value}', clearing again")
+                await date_input.evaluate('el => { el.value = ""; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); }')
+                await asyncio.sleep(0.3)
+                # Also try selecting all and deleting
+                await date_input.press('Control+a')
+                await asyncio.sleep(0.1)
+                await date_input.press('Delete')
+                await asyncio.sleep(0.2)
             
             # Type the date range
             await date_input.type(date_range_str, delay=50)  # Small delay between keystrokes
             await asyncio.sleep(0.5)
+            
+            # Verify the value was set correctly
+            final_value = await date_input.input_value()
+            logger.debug(f"Date input value after typing: '{final_value}'")
+            if date_range_str not in final_value:
+                logger.warning(f"Date range may not have been set correctly. Expected: '{date_range_str}', Got: '{final_value}'")
+                print(f"[WARNING] Date range may not have been set correctly. Expected: '{date_range_str}', Got: '{final_value}'")
             
             # Press Enter to apply
             logger.info("Pressing Enter to apply date range")
@@ -866,7 +1002,31 @@ class YouScanParser:
             await date_input.press('Enter')
             
             # Wait for page to update after date change
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
+            
+            # Verify the date range was applied by checking URL or page content
+            current_url = self.page.url
+            logger.debug(f"URL after setting date range: {current_url}")
+            
+            # Check if URL contains the date range
+            # Note: We compare against the original dates (not adjusted), because the website
+            # should display the dates we want, even if we had to add 1 day to compensate for timezone
+            if 'from=' in current_url and 'to=' in current_url:
+                from_match = re.search(r'from=(\d{4}-\d{2}-\d{2})', current_url)
+                to_match = re.search(r'to=(\d{4}-\d{2}-\d{2})', current_url)
+                if from_match and to_match:
+                    url_from = from_match.group(1)
+                    url_to = to_match.group(1)
+                    expected_from = date_from.strftime('%Y-%m-%d')
+                    expected_to = date_to.strftime('%Y-%m-%d')
+                    if url_from == expected_from and url_to == expected_to:
+                        logger.info(f"Date range verified in URL: {url_from} to {url_to}")
+                        print(f"[INFO] Date range verified in URL: {url_from} to {url_to}")
+                    else:
+                        logger.warning(f"Date range mismatch! Expected: {expected_from} to {expected_to}, Got in URL: {url_from} to {url_to}")
+                        print(f"[WARNING] Date range mismatch! Expected: {expected_from} to {expected_to}, Got in URL: {url_from} to {url_to}")
+                        logger.info(f"Note: We typed {date_range_str} to compensate for timezone offset")
+                        print(f"[INFO] Note: We typed {date_range_str} to compensate for timezone offset")
             
             logger.info("Date range set successfully")
             print("[INFO] Date range set successfully")
@@ -1055,23 +1215,54 @@ class YouScanParser:
             if numeric_ids and len(numeric_ids) > 0:
                 logger.info(f"Found {len(numeric_ids)} entries with numeric IDs: {numeric_ids[:5]}...")
                 print(f"[INFO] Found {len(numeric_ids)} entries with numeric IDs")
-                # Now get the actual elements by their IDs
-                for entry_id in numeric_ids:
-                    try:
-                        elem = await self.page.query_selector(f'div#{entry_id}')
-                        if elem:
-                            entry_elements.append(elem)
-                    except:
-                        continue
-                if entry_elements:
-                    logger.info(f"Retrieved {len(entry_elements)} valid entry elements")
-                    print(f"[INFO] Retrieved {len(entry_elements)} valid entry elements")
+                
+                # Use the more reliable method: Query all divs with IDs and filter by numeric_ids
+                # This is more reliable than querying each ID individually
+                try:
+                    all_divs_with_ids = await self.page.query_selector_all('div[id]')
+                    logger.debug(f"Found {len(all_divs_with_ids)} divs with id attribute")
+                    numeric_ids_set = set(numeric_ids)
+                    
+                    for div in all_divs_with_ids:
+                        try:
+                            div_id = await div.get_attribute('id')
+                            if div_id and div_id in numeric_ids_set:
+                                entry_elements.append(div)
+                        except:
+                            continue
+                    
+                    if entry_elements:
+                        logger.info(f"Retrieved {len(entry_elements)} entries using bulk query method")
+                        print(f"[INFO] Retrieved {len(entry_elements)} entries using bulk query method")
+                    else:
+                        logger.warning(f"Found {len(numeric_ids)} numeric IDs but couldn't retrieve any elements")
+                        print(f"[WARNING] Found {len(numeric_ids)} numeric IDs but couldn't retrieve any elements")
+                except Exception as bulk_error:
+                    logger.debug(f"Bulk query method failed: {bulk_error}, trying individual queries")
+                    # Fallback: Try individual queries
+                    for entry_id in numeric_ids:
+                        try:
+                            # Use CSS selector with ID - escape special characters if needed
+                            elem = await self.page.query_selector(f'div#{entry_id}')
+                            if elem:
+                                entry_elements.append(elem)
+                            else:
+                                # Try alternative: query by attribute
+                                elem = await self.page.query_selector(f'div[id="{entry_id}"]')
+                                if elem:
+                                    entry_elements.append(elem)
+                        except Exception as e:
+                            logger.debug(f"Error getting element with ID {entry_id}: {e}")
+                            continue
+                    if entry_elements:
+                        logger.info(f"Retrieved {len(entry_elements)} valid entry elements using individual queries")
+                        print(f"[INFO] Retrieved {len(entry_elements)} valid entry elements using individual queries")
         except Exception as e:
             logger.debug(f"JavaScript-based entry finding failed: {e}")
             import traceback
             traceback.print_exc()
         
-        # Fallback: Try CSS selectors if JavaScript approach didn't work
+        # Final fallback: Try CSS selectors if JavaScript approach didn't work
         if not entry_elements:
             entry_selectors = [
                 'div[id^="7"]',  # IDs starting with 7
@@ -1161,10 +1352,45 @@ class YouScanParser:
     async def _parse_single_entry_async(self, entry_elem, target_date: date) -> Optional[ParsedEntry]:
         """Parse a single entry element (async version)."""
         import logging
+        from datetime import datetime
         logger = logging.getLogger(__name__)
         
+        # First, extract the actual date from the entry to filter by target_date
+        entry_date = None
+        try:
+            # Look for date link: <a href="..." class="j0EW2HMfFh3MvBbwygOB">2 січня 2026 р., 14:37</a>
+            date_link = await entry_elem.query_selector('a.j0EW2HMfFh3MvBbwygOB, a[href*="facebook"], a[href*="instagram"]')
+            if date_link:
+                date_text = await date_link.inner_text()
+                # Parse Ukrainian date format: "2 січня 2026 р., 14:37" or "2 января 2026 г., 14:37"
+                # Map Ukrainian/Russian month names to numbers
+                month_map = {
+                    'січня': 1, 'лютого': 2, 'березня': 3, 'квітня': 4, 'травня': 5, 'червня': 6,
+                    'липня': 7, 'серпня': 8, 'вересня': 9, 'жовтня': 10, 'листопада': 11, 'грудня': 12,
+                    'января': 1, 'февраля': 2, 'марта': 3, 'апреля': 4, 'мая': 5, 'июня': 6,
+                    'июля': 7, 'августа': 8, 'сентября': 9, 'октября': 10, 'ноября': 11, 'декабря': 12,
+                }
+                
+                # Try to parse date from text like "2 січня 2026 р., 14:37"
+                date_match = re.search(r'(\d{1,2})\s+([а-яіїєґ]+)\s+(\d{4})', date_text, re.IGNORECASE)
+                if date_match:
+                    day = int(date_match.group(1))
+                    month_name = date_match.group(2).lower()
+                    year = int(date_match.group(3))
+                    month = month_map.get(month_name)
+                    if month:
+                        entry_date = date(year, month, day)
+                        logger.debug(f"Extracted entry date: {entry_date} from text: '{date_text}'")
+        except Exception as e:
+            logger.debug(f"Could not extract date from entry: {e}")
+        
+        # Filter: Only parse entries that match the target_date
+        if entry_date and entry_date != target_date:
+            logger.debug(f"Skipping entry with date {entry_date} (target: {target_date})")
+            return None
+        
         entry = ParsedEntry()
-        entry.date = target_date
+        entry.date = entry_date if entry_date else target_date
         
         try:
             # 1. Parse user name (Назва)

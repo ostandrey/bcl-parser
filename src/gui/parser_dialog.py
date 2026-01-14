@@ -82,6 +82,18 @@ class ParsingThread(QThread):
             logger.info(f"Starting to parse {total_days} day(s)")
             print(f"[INFO] Starting to parse {total_days} day(s)")
             
+            # Set the full date range once at the beginning
+            # Get date_from (first date) and date_to (last date) from the dates list
+            if self.dates:
+                date_from = min(self.dates)
+                date_to = max(self.dates)
+                logger.info(f"Setting date range for full period: {date_from} to {date_to}")
+                print(f"[INFO] Setting date range for full period: {date_from} to {date_to}")
+                await self.parser.set_date_range_async(date_from, date_to)
+            else:
+                logger.warning("No dates to parse")
+                print("[WARNING] No dates to parse")
+            
             for day_idx, target_date in enumerate(self.dates):
                 if self._stop_requested:
                     break
@@ -91,12 +103,7 @@ class ParsingThread(QThread):
                 print(f"[INFO] Parsing date: {target_date}")
                 
                 try:
-                    # Set date range (single day)
-                    logger.debug(f"Setting date range for {target_date}")
-                    print(f"[DEBUG] Setting date range for {target_date}")
-                    await self.parser.set_date_range_async(target_date, target_date)
-                    
-                    # Parse all entries for this day
+                    # Parse all entries for this day (date range already set above)
                     logger.info(f"Fetching entries for {target_date}")
                     print(f"[INFO] Fetching entries for {target_date}")
                     day_entries = await self.parser.parse_all_entries_async(target_date)
@@ -420,9 +427,19 @@ class ParserDialog(QDialog):
         if start_row == 0:
             start_row = None  # Auto
         
-        # Write entries
+        # Reset progress bar for writing
+        self.progress_bar.setValue(0)
+        self.status_label.setText("Writing to Google Sheets...")
+        
+        # Write entries with progress callback
+        def update_progress(current, total, message):
+            """Update progress bar for Google Sheets writing."""
+            self.status_label.setText(message)
+            if total > 0:
+                self.progress_bar.setValue(int((current / total) * 100))
+        
         try:
-            result = sheets_writer.write_entries(self.table_name, self.entries, start_row)
+            result = sheets_writer.write_entries(self.table_name, self.entries, start_row, progress_callback=update_progress)
             
             if result['success']:
                 # Mark dates as parsed

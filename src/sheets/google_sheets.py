@@ -5,6 +5,8 @@ from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from typing import List, Dict, Optional
+import time
+import logging
 from ..database.models import ParsedEntry
 from ..config import COLUMN_MAPPINGS, SOCIAL_NETWORK_OPTIONS
 
@@ -113,7 +115,8 @@ class GoogleSheetsWriter:
         self, 
         sheet_name: str, 
         entries: List[ParsedEntry], 
-        start_row: Optional[int] = None
+        start_row: Optional[int] = None,
+        progress_callback: Optional[callable] = None
     ) -> Dict[str, any]:
         """
         Write entries to Google Sheets.
@@ -124,6 +127,10 @@ class GoogleSheetsWriter:
         if not entries:
             return {'success': True, 'written': 0, 'failed': []}
         
+        # Initialize progress
+        if progress_callback:
+            progress_callback(0, len(entries), f"Preparing to write {len(entries)} entries to Google Sheets...")
+        
         sheet = self.get_sheet(sheet_name)
         column_mapping = COLUMN_MAPPINGS.get(sheet_name, {})
         
@@ -133,47 +140,120 @@ class GoogleSheetsWriter:
         
         written = 0
         failed = []
+        logger = logging.getLogger(__name__)
         
-        for idx, entry in enumerate(entries):
-            try:
-                row_num = start_row + idx
-                row_data = self._entry_to_row_data(entry, sheet_name, column_mapping)
-                
-                # Write row using update_cell for individual cells (more reliable)
-                # Sort columns to write in order (A, B, C, D, E, F, G)
-                sorted_cols = sorted(row_data.items(), key=lambda x: x[0])
-                
-                for col_letter, value in sorted_cols:
-                    try:
-                        # Validate col_letter is a single letter (A-Z)
-                        if not col_letter or len(col_letter) != 1 or not col_letter.isalpha():
-                            raise ValueError(f"Invalid column letter: {col_letter}")
-                        
-                        # Use update_cell(row, col, value) where col is 1-indexed
-                        # Convert column letter to number (A=1, B=2, etc.)
-                        col_num = ord(col_letter.upper()) - ord('A') + 1
-                        # Ensure value is a string and not None
-                        cell_value = str(value) if value is not None else ''
-                        sheet.update_cell(row_num, col_num, cell_value)
-                    except Exception as cell_error:
-                        # Fallback: use range notation with proper format
-                        # Double-check we have a valid cell reference
-                        if col_letter and len(col_letter) == 1 and col_letter.isalpha():
-                            cell_range = f"{col_letter}{row_num}"
-                            cell_value = str(value) if value is not None else ''
-                            # Use proper gspread update format: range, values (list of lists)
-                            sheet.update(cell_range, [[cell_value]], value_input_option='RAW')
+        # Prepare all rows for batch writing
+        rows_to_write = []
+        for entry in entries:
+            row_data = self._entry_to_row_data(entry, sheet_name, column_mapping)
+            # Convert row_data dict to list in column order (A, B, C, D, E, F, G)
+            sorted_cols = sorted(row_data.items(), key=lambda x: x[0])
+            row_values = [str(value) if value is not None else '' for _, value in sorted_cols]
+            rows_to_write.append(row_values)
+        
+        # Write rows in batches to avoid rate limits
+        # Google Sheets API allows up to 100 requests per 100 seconds per user
+        # We'll write in batches of 5 rows with delays
+        batch_size = 5
+        delay_between_batches = 1.0  # 1 second delay between batches
+        delay_between_retries = 2.0  # 2 seconds delay for retries
+        
+        for batch_start in range(0, len(rows_to_write), batch_size):
+            batch_end = min(batch_start + batch_size, len(rows_to_write))
+            batch_rows = rows_to_write[batch_start:batch_end]
+            batch_entries = entries[batch_start:batch_end]
+            
+            # Try to write batch with retry logic
+            max_retries = 3
+            retry_count = 0
+            batch_written = False
+            
+            while retry_count < max_retries and not batch_written:
+                try:
+                    # Write entire batch at once using range update (most efficient)
+                    first_row_num = start_row + written
+                    last_row_num = start_row + written + len(batch_rows) - 1
+                    
+                    # Get column range (e.g., A2:G6 for 5 rows)
+                    first_col = sorted(column_mapping.values())[0] if column_mapping.values() else 'A'
+                    last_col = sorted(column_mapping.values())[-1] if column_mapping.values() else 'G'
+                    range_name = f"{first_col}{first_row_num}:{last_col}{last_row_num}"
+                    
+                    # Write entire batch at once (list of lists)
+                    sheet.update(range_name, batch_rows, value_input_option='RAW')
+                    
+                    # All rows in batch written successfully
+                    written += len(batch_rows)
+                    batch_written = True
+                    logger.info(f"Written batch: {len(batch_rows)} rows (total: {written}/{len(entries)})")
+                    
+                    # Update progress
+                    if progress_callback:
+                        progress_callback(written, len(entries), f"Writing to Google Sheets: {written}/{len(entries)} entries")
+                    
+                except Exception as e:
+                    error_str = str(e)
+                    # Check if it's a rate limit error (429)
+                    if '429' in error_str or 'quota' in error_str.lower() or 'rate limit' in error_str.lower():
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            wait_time = delay_between_retries * (2 ** (retry_count - 1))  # Exponential backoff
+                            logger.warning(f"Rate limit hit, waiting {wait_time:.1f}s before retry {retry_count}/{max_retries}")
+                            time.sleep(wait_time)
+                            continue
                         else:
-                            raise ValueError(f"Invalid column letter for fallback: {col_letter}")
-                
-                written += 1
-                
-            except Exception as e:
-                failed.append({
-                    'entry': entry,
-                    'error': str(e),
-                    'row': start_row + idx
-                })
+                            # Max retries reached, write rows individually with delays
+                            logger.warning(f"Batch write failed after {max_retries} retries, writing individually")
+                            for idx, (row_values, entry) in enumerate(zip(batch_rows, batch_entries)):
+                                individual_retry = 0
+                                individual_written = False
+                                
+                                while individual_retry < 2 and not individual_written:
+                                    try:
+                                        row_num = start_row + written + idx
+                                        first_col = sorted(column_mapping.values())[0] if column_mapping.values() else 'A'
+                                        last_col = sorted(column_mapping.values())[-1] if column_mapping.values() else 'G'
+                                        range_name = f"{first_col}{row_num}:{last_col}{row_num}"
+                                        sheet.update(range_name, [row_values], value_input_option='RAW')
+                                        written += 1
+                                        individual_written = True
+                                        
+                                        # Update progress
+                                        if progress_callback:
+                                            progress_callback(written, len(entries), f"Writing to Google Sheets: {written}/{len(entries)} entries")
+                                        
+                                        time.sleep(0.5)  # Delay between individual writes
+                                    except Exception as individual_error:
+                                        individual_retry += 1
+                                        if individual_retry < 2:
+                                            time.sleep(1.0 * individual_retry)  # Exponential backoff
+                                        else:
+                                            failed.append({
+                                                'entry': entry,
+                                                'error': str(individual_error),
+                                                'row': start_row + written + idx
+                                            })
+                            break
+                    else:
+                        # Non-rate-limit error, add to failed
+                        for entry in batch_entries:
+                            failed.append({
+                                'entry': entry,
+                                'error': error_str,
+                                'row': start_row + written + len(failed)
+                            })
+                        break
+            
+            # Delay between batches to avoid rate limits
+            if batch_end < len(rows_to_write):
+                time.sleep(delay_between_batches)
+        
+        # Final progress update
+        if progress_callback:
+            if len(failed) == 0:
+                progress_callback(len(entries), len(entries), f"Successfully wrote {written} entries to Google Sheets")
+            else:
+                progress_callback(written, len(entries), f"Wrote {written}/{len(entries)} entries ({len(failed)} failed)")
         
         return {
             'success': len(failed) == 0,
