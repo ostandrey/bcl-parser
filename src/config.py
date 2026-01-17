@@ -184,6 +184,18 @@ class Config:
         """Set default table name."""
         self.set('default_table', value)
 
+    @property
+    def export_dir(self) -> str:
+        """Default directory to export offline reports (Excel)."""
+        # Prefer user's Documents folder when available
+        default_dir = Path.home() / "Documents" / "bcl-parser-reports"
+        return self.get('export_dir', str(default_dir))
+
+    @export_dir.setter
+    def export_dir(self, value: str):
+        """Set default export directory."""
+        self.set('export_dir', value)
+
 
 def detect_table_from_link(link: str) -> str:
     """Detect which table to use based on link."""

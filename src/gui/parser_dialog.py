@@ -3,7 +3,7 @@ import logging
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
     QTableWidget, QTableWidgetItem, QLabel, QProgressBar,
-    QMessageBox, QSpinBox, QCheckBox, QTextEdit
+    QMessageBox, QSpinBox, QCheckBox, QTextEdit, QLineEdit, QFileDialog
 )
 from PyQt6.QtCore import Qt, QThread
 from PyQt6.QtCore import pyqtSignal
@@ -15,6 +15,7 @@ from ..sheets.google_sheets import GoogleSheetsWriter
 from ..config import Config
 from ..database.db_manager import DatabaseManager
 from ..utils.date_tracker import DateTracker
+from ..export.excel_exporter import export_entries_to_xlsx
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +233,21 @@ class ParserDialog(QDialog):
         
         options_layout.addStretch()
         layout.addLayout(options_layout)
+
+        # Offline export (Excel) options
+        export_layout = QHBoxLayout()
+        export_layout.addWidget(QLabel("Export path:"))
+
+        self.export_path_input = QLineEdit()
+        self.export_path_input.setPlaceholderText("Select a folder or file path for the Excel report...")
+        self.export_path_input.setText(self.config.export_dir)
+        export_layout.addWidget(self.export_path_input)
+
+        self.browse_export_button = QPushButton("Browse…")
+        self.browse_export_button.clicked.connect(self._on_browse_export_path)
+        export_layout.addWidget(self.browse_export_button)
+
+        layout.addLayout(export_layout)
         
         # Buttons
         button_layout = QHBoxLayout()
@@ -240,6 +256,11 @@ class ParserDialog(QDialog):
         self.cancel_button.clicked.connect(self._on_cancel)
         button_layout.addWidget(self.cancel_button)
         
+        self.export_button = QPushButton("Generate Excel report")
+        self.export_button.setEnabled(False)
+        self.export_button.clicked.connect(self._on_export_excel)
+        button_layout.addWidget(self.export_button)
+
         self.submit_button = QPushButton("Submit to Google Sheets")
         self.submit_button.setEnabled(False)
         self.submit_button.clicked.connect(self._on_submit)
@@ -362,7 +383,90 @@ class ParserDialog(QDialog):
         
         # Enable submit button
         self.submit_button.setEnabled(len(entries) > 0)
+        self.export_button.setEnabled(len(entries) > 0)
         self.cancel_button.setText("Close")
+
+    def _on_browse_export_path(self):
+        """Select export directory (or file path)."""
+        # Prefer selecting a directory; user can still type filename manually.
+        start_dir = self.export_path_input.text().strip() or self.config.export_dir
+        directory = QFileDialog.getExistingDirectory(self, "Select export folder", start_dir)
+        if directory:
+            self.export_path_input.setText(directory)
+            self.config.export_dir = directory
+
+    def _on_export_excel(self):
+        """Generate Excel report locally (offline)."""
+        if not self.entries:
+            QMessageBox.warning(self, "No Data", "No entries to export.")
+            return
+
+        base = self.export_path_input.text().strip() or self.config.export_dir
+        if not base:
+            QMessageBox.warning(self, "Missing Path", "Please choose an export folder.")
+            return
+
+        # Build a default filename if user provided a folder
+        from pathlib import Path
+        safe_table = (self.table_name or "report").replace("/", "_").replace("\\", "_")
+        filename = f"{safe_table}_{self.date_from.isoformat()}_{self.date_to.isoformat()}.xlsx"
+        out_path = Path(base)
+        if out_path.suffix.lower() != ".xlsx":
+            out_path = out_path / filename
+
+        self.config.export_dir = str(Path(base))
+
+        class ExcelExportThread(QThread):
+            progress = pyqtSignal(int, int, str)
+            finished = pyqtSignal(str)
+            failed = pyqtSignal(str)
+
+            def __init__(self, entries, output_path):
+                super().__init__()
+                self._entries = entries
+                self._output_path = output_path
+
+            def run(self):
+                try:
+                    def cb(current, total, message):
+                        self.progress.emit(current, total, message)
+
+                    out = export_entries_to_xlsx(self._entries, self._output_path, progress_callback=cb)
+                    self.finished.emit(str(out))
+                except Exception as e:
+                    self.failed.emit(str(e))
+
+        # Disable buttons while exporting
+        self.export_button.setEnabled(False)
+        self.submit_button.setEnabled(False)
+        self.cancel_button.setEnabled(False)
+        self.browse_export_button.setEnabled(False)
+
+        self.progress_bar.setValue(0)
+        self.status_label.setText("Generating Excel report...")
+
+        self._excel_thread = ExcelExportThread(list(self.entries), str(out_path))
+        self._excel_thread.progress.connect(self._on_progress)
+
+        def on_done(path_str: str):
+            self.progress_bar.setValue(100)
+            self.status_label.setText(f"Excel saved: {path_str}")
+            QMessageBox.information(self, "Excel exported", f"Report saved to:\n{path_str}")
+            self.export_button.setEnabled(True)
+            self.submit_button.setEnabled(True)
+            self.cancel_button.setEnabled(True)
+            self.browse_export_button.setEnabled(True)
+
+        def on_fail(err: str):
+            QMessageBox.critical(self, "Excel export failed", err)
+            self.export_button.setEnabled(True)
+            self.submit_button.setEnabled(True)
+            self.cancel_button.setEnabled(True)
+            self.browse_export_button.setEnabled(True)
+
+        self._excel_thread.finished.connect(on_done)
+        self._excel_thread.failed.connect(on_fail)
+        self._excel_thread.start()
     
     def _on_parsing_error(self, message: str, entry: Optional[ParsedEntry]):
         """Handle parsing error."""
