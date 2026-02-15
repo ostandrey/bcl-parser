@@ -2,7 +2,7 @@
 import logging
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QComboBox, QLabel, QDateEdit, QMessageBox
+    QPushButton, QComboBox, QLabel, QDateEdit, QMessageBox, QDialog
 )
 from PyQt6.QtCore import QDate
 from datetime import date
@@ -77,10 +77,20 @@ class MainWindow(QMainWindow):
         self.parse_button.clicked.connect(self._on_start_parsing)
         layout.addWidget(self.parse_button)
         
+        # Buttons layout
+        buttons_layout = QHBoxLayout()
+        
+        # Create Table button
+        create_table_button = QPushButton("Create Table")
+        create_table_button.clicked.connect(self._on_create_table)
+        buttons_layout.addWidget(create_table_button)
+        
         # Settings button
         settings_button = QPushButton("Settings")
         settings_button.clicked.connect(self._on_settings)
-        layout.addWidget(settings_button)
+        buttons_layout.addWidget(settings_button)
+        
+        layout.addLayout(buttons_layout)
     
     def _check_missing_days(self):
         """Check for missing days and display notification."""
@@ -178,4 +188,22 @@ class MainWindow(QMainWindow):
         from .settings_dialog import SettingsDialog
         dialog = SettingsDialog(self, self.config)
         dialog.exec()
+    
+    def _on_create_table(self):
+        """Handle create table button click."""
+        from .create_table_dialog import CreateTableDialog
+        dialog = CreateTableDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            created_table = dialog.get_created_table_name()
+            if created_table:
+                # Refresh table combo box
+                self.table_combo.clear()
+                from ..config import AVAILABLE_TABLES
+                # Add the new table to the list
+                if created_table not in AVAILABLE_TABLES:
+                    AVAILABLE_TABLES.append(created_table)
+                self.table_combo.addItems(AVAILABLE_TABLES)
+                self.table_combo.setCurrentText(created_table)
+                logger.info(f"Created new table: {created_table}")
+                print(f"[INFO] Created new table: {created_table}")
 

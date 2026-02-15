@@ -4,22 +4,34 @@ import json
 from pathlib import Path
 from typing import Dict, Optional
 
-# Social network to table mapping
-SOCIAL_NETWORKS = {
-    'facebook.com': 'Соцмережі 2025',
-    'instagram.com': 'Соцмережі 2025',
-    'twitter.com': 'Соцмережі 2025',
-    'x.com': 'Соцмережі 2025',
-    'linkedin.com': 'Соцмережі 2025',
-    'youtube.com': 'Соцмережі 2025',
-    'youtu.be': 'Соцмережі 2025',
-    't.me': 'Соцмережі 2025',
-    'tiktok.com': 'Соцмережі 2025',
-    'threads.net': 'Соцмережі 2025',
-    'soundcloud.com': 'Соцмережі 2025',
+# Social network domains (for detection)
+SOCIAL_NETWORK_DOMAINS = [
+    'facebook.com',
+    'instagram.com',
+    'twitter.com',
+    'x.com',
+    'linkedin.com',
+    'youtube.com',
+    'youtu.be',
+    't.me',
+    'telegram.me',
+    'tiktok.com',
+    'threads.net',
+    'soundcloud.com',
+]
+
+# Table name patterns (year-based)
+TABLE_NAME_PATTERNS = {
+    'social_network': 'Соцмережі {YEAR}',
+    'media': 'ЗМІ {YEAR}',
 }
 
-# Default table for non-social networks
+# Legacy mapping for backward compatibility (deprecated, use detect_table_from_entry instead)
+SOCIAL_NETWORKS = {
+    domain: 'Соцмережі 2025' for domain in SOCIAL_NETWORK_DOMAINS
+}
+
+# Default table for non-social networks (deprecated, use detect_table_from_entry instead)
 DEFAULT_MEDIA_TABLE = 'ЗМІ 2025'
 
 # Available tables
@@ -38,6 +50,33 @@ SOCIAL_NETWORK_OPTIONS = [
     'soundcloud'
 ]
 
+# Tag dropdown options (Тема) - must match Google Sheets dropdown
+TAG_OPTIONS = [
+    'Активні парки',
+    'Альбом бб рішень',
+    'ББ маршрути',
+    'ББ укриття',
+    'Безбар\'єрність',
+    'Вакансії',
+    'Витачів',
+    'КИТ Кураж',
+    'Локо Сіті',
+    'M86',
+    'НУШ',
+    'Облаштування житла',
+    'Профтех',
+    'Профтех Славутич',
+    'Психкімнати',
+    'ПУМБ',
+    'Соцжитло',
+    'Терсад',
+    'Урбан-парк ВДНГ',
+    'Школа Посад',
+    'Виставка " 86дМ"',
+    'Трансформація шкіл',
+    'Візія Маріуполя',
+]
+
 # Map domains to dropdown options
 DOMAIN_TO_SOCIAL_NETWORK = {
     'facebook.com': 'Facebook',
@@ -48,33 +87,61 @@ DOMAIN_TO_SOCIAL_NETWORK = {
     'youtube.com': 'YouTube',
     'youtu.be': 'YouTube',
     't.me': 'Telegram',
+    'telegram.me': 'Telegram',
     'tiktok.com': 'Tiktok',
     'threads.net': 'threads.net',
     'soundcloud.com': 'soundcloud',
 }
 
-# Column mappings for Google Sheets
+# Base column mappings (year-agnostic templates)
+SOCIAL_NETWORK_COLUMNS = {
+    'Місяць': 'A',     # Column A
+    'Назва': 'B',      # Column B
+    'Хто це': 'C',     # Column C
+    'Тема': 'D',       # Column D
+    'Соцмережа': 'E',  # Column E
+    'Лінк': 'F',       # Column F
+    'Примітки': 'G',   # Column G
+}
+
+MEDIA_COLUMNS = {
+    'Місяць': 'A',
+    'Медіа': 'B',
+    'Тема': 'C',
+    'Лінк': 'D',
+    'Примітки': 'E',
+}
+
+# Legacy column mappings for backward compatibility
 COLUMN_MAPPINGS = {
-    'Соцмережі 2025': {
-        'Місяць': 'A',     # Column A
-        'Назва': 'B',      # Column B
-        'Хто це': 'C',     # Column C
-        'Тема': 'D',       # Column D
-        'Соцмережа': 'E',  # Column E
-        'Лінк': 'F',       # Column F
-        'Примітки': 'G',   # Column G
-    },
-    'ЗМІ 2025': {
-        'Місяць': 'A',
-        'Медіа': 'B',
-        'Тема': 'C',
-        'Лінк': 'D',
-        'Примітки': 'E',
-    },
+    'Соцмережі 2025': SOCIAL_NETWORK_COLUMNS,
+    'ЗМІ 2025': MEDIA_COLUMNS,
     'Вакансії': {
         # Define when needed
     }
 }
+
+
+def get_column_mapping(table_name: str) -> dict:
+    """
+    Get column mapping for a table name (supports year-based tables).
+    
+    Args:
+        table_name: Table name (e.g., "Соцмережі 2025", "ЗМІ 2026")
+    
+    Returns:
+        Dictionary mapping column names to column letters
+    """
+    # Check if it's a social network table (any year)
+    if 'Соцмережі' in table_name:
+        return SOCIAL_NETWORK_COLUMNS.copy()
+    
+    # Check if it's a media table (any year)
+    if 'ЗМІ' in table_name:
+        return MEDIA_COLUMNS.copy()
+    
+    # Fallback to legacy mappings
+    return COLUMN_MAPPINGS.get(table_name, SOCIAL_NETWORK_COLUMNS.copy())
 
 
 class Config:
@@ -197,13 +264,67 @@ class Config:
         self.set('export_dir', value)
 
 
-def detect_table_from_link(link: str) -> str:
-    """Detect which table to use based on link."""
+def detect_table_from_link(link: str, entry_date=None) -> str:
+    """
+    Detect which table to use based on link.
+    
+    Args:
+        link: The post URL
+        entry_date: Optional date object to determine year. If None, uses current year.
+    
+    Returns:
+        Table name with year (e.g., "Соцмережі 2025" or "ЗМІ 2025")
+    """
+    from datetime import date
+    
+    # Determine year
+    if entry_date:
+        year = entry_date.year
+    else:
+        year = date.today().year
+    
+    # Check if link is from a social network
     link_lower = link.lower()
-    for domain, table in SOCIAL_NETWORKS.items():
-        if domain in link_lower:
-            return table
-    return DEFAULT_MEDIA_TABLE
+    is_social_network = any(domain in link_lower for domain in SOCIAL_NETWORK_DOMAINS)
+    
+    # Return appropriate table name based on category
+    if is_social_network:
+        return TABLE_NAME_PATTERNS['social_network'].format(YEAR=year)
+    else:
+        return TABLE_NAME_PATTERNS['media'].format(YEAR=year)
+
+
+def detect_table_from_entry(entry) -> str:
+    """
+    Detect which table to use based on entry (preferred method).
+    
+    Args:
+        entry: ParsedEntry object with link, social_network, and date
+    
+    Returns:
+        Table name with year (e.g., "Соцмережі 2025" or "ЗМІ 2025")
+    """
+    from datetime import date
+    
+    # Determine year from entry date
+    if entry.date:
+        year = entry.date.year
+    else:
+        year = date.today().year
+    
+    # Check if entry has a social network (most reliable method)
+    if entry.social_network and entry.social_network.strip():
+        return TABLE_NAME_PATTERNS['social_network'].format(YEAR=year)
+    
+    # Fallback: check link domain
+    if entry.link:
+        link_lower = entry.link.lower()
+        is_social_network = any(domain in link_lower for domain in SOCIAL_NETWORK_DOMAINS)
+        if is_social_network:
+            return TABLE_NAME_PATTERNS['social_network'].format(YEAR=year)
+    
+    # Default: media table
+    return TABLE_NAME_PATTERNS['media'].format(YEAR=year)
 
 
 def detect_social_network_from_link(link: str) -> str:

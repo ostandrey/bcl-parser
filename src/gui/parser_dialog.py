@@ -3,7 +3,7 @@ import logging
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
     QTableWidget, QTableWidgetItem, QLabel, QProgressBar,
-    QMessageBox, QSpinBox, QCheckBox, QTextEdit, QLineEdit, QFileDialog
+    QMessageBox, QSpinBox, QCheckBox, QTextEdit, QLineEdit, QFileDialog, QWidget
 )
 from PyQt6.QtCore import Qt, QThread
 from PyQt6.QtCore import pyqtSignal
@@ -114,7 +114,8 @@ class ParsingThread(QThread):
                     for entry in day_entries:
                         if self._stop_requested:
                             break
-                        entry.table_name = self.table_name
+                        # entry.table_name is already set by detect_table_from_entry() in parser
+                        # Don't override it - let entries go to their automatically detected tables
                         self.entries.append(entry)
                         self.entry_parsed.emit(entry)
                     
@@ -176,6 +177,7 @@ class ParserDialog(QDialog):
         self.errors: List[Dict] = []
         self.parser: Optional[YouScanParser] = None
         self.parsing_thread: Optional[ParsingThread] = None
+        self.table_checkboxes: Dict[str, QCheckBox] = {}  # {table_name: checkbox}
         
         self.setWindowTitle("Parsing Data")
         self.setMinimumSize(800, 600)
@@ -202,12 +204,28 @@ class ParserDialog(QDialog):
         layout.addWidget(table_label)
         
         self.entries_table = QTableWidget()
-        self.entries_table.setColumnCount(6)
+        self.entries_table.setColumnCount(7)
         self.entries_table.setHorizontalHeaderLabels([
-            'Name', 'Social Network', 'Tag', 'Link', 'Note', 'Description'
+            'Table', 'Name', 'Social Network', 'Tag', 'Link', 'Note', 'Description'
         ])
         self.entries_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        # Make table column wider
+        self.entries_table.setColumnWidth(0, 150)
         layout.addWidget(self.entries_table)
+        
+        # Table selection section (shown after parsing)
+        self.table_summary_label = QLabel("Tables to write:")
+        self.table_summary_label.setVisible(False)
+        layout.addWidget(self.table_summary_label)
+        
+        self.table_checkboxes_widget = QWidget()
+        self.table_checkboxes_layout = QVBoxLayout()
+        self.table_checkboxes_widget.setLayout(self.table_checkboxes_layout)
+        self.table_checkboxes_widget.setVisible(False)
+        layout.addWidget(self.table_checkboxes_widget)
+        
+        # Store table checkboxes
+        self.table_checkboxes = {}  # {table_name: checkbox}
         
         # Errors section (collapsible)
         self.errors_checkbox = QCheckBox("Show Errors")
@@ -353,12 +371,22 @@ class ParserDialog(QDialog):
         row = self.entries_table.rowCount()
         self.entries_table.insertRow(row)
         
-        self.entries_table.setItem(row, 0, QTableWidgetItem(entry.name or ''))
-        self.entries_table.setItem(row, 1, QTableWidgetItem(entry.social_network or ''))
-        self.entries_table.setItem(row, 2, QTableWidgetItem(entry.tag or ''))
-        self.entries_table.setItem(row, 3, QTableWidgetItem(entry.link or ''))
-        self.entries_table.setItem(row, 4, QTableWidgetItem(entry.note[:100] + '...' if len(entry.note) > 100 else entry.note))
-        self.entries_table.setItem(row, 5, QTableWidgetItem(entry.description or ''))
+        # Column 0: Table name
+        table_name = entry.table_name or 'ЗМІ 2025'
+        self.entries_table.setItem(row, 0, QTableWidgetItem(table_name))
+        
+        # Column 1: Name
+        self.entries_table.setItem(row, 1, QTableWidgetItem(entry.name or ''))
+        # Column 2: Social Network
+        self.entries_table.setItem(row, 2, QTableWidgetItem(entry.social_network or ''))
+        # Column 3: Tag
+        self.entries_table.setItem(row, 3, QTableWidgetItem(entry.tag or ''))
+        # Column 4: Link
+        self.entries_table.setItem(row, 4, QTableWidgetItem(entry.link or ''))
+        # Column 5: Note
+        self.entries_table.setItem(row, 5, QTableWidgetItem(entry.note[:100] + '...' if len(entry.note) > 100 else entry.note))
+        # Column 6: Description
+        self.entries_table.setItem(row, 6, QTableWidgetItem(entry.description or ''))
         
         # Auto-scroll to bottom
         self.entries_table.scrollToBottom()
@@ -370,6 +398,16 @@ class ParserDialog(QDialog):
         
         self.status_label.setText(f"Parsing complete: {len(entries)} entries, {len(errors)} errors")
         self.progress_bar.setValue(100)
+        
+        # Group entries by table and show table selection
+        from collections import defaultdict
+        entries_by_table = defaultdict(list)
+        for entry in entries:
+            table_name = entry.table_name or 'ЗМІ 2025'
+            entries_by_table[table_name].append(entry)
+        
+        # Update table selection UI
+        self._update_table_selection(entries_by_table)
         
         # Show errors if any
         if errors:
@@ -385,6 +423,29 @@ class ParserDialog(QDialog):
         self.submit_button.setEnabled(len(entries) > 0)
         self.export_button.setEnabled(len(entries) > 0)
         self.cancel_button.setText("Close")
+    
+    def _update_table_selection(self, entries_by_table: Dict[str, List[ParsedEntry]]):
+        """Update table selection UI with checkboxes for each table."""
+        # Clear existing checkboxes
+        for checkbox in self.table_checkboxes.values():
+            self.table_checkboxes_layout.removeWidget(checkbox)
+            checkbox.deleteLater()
+        self.table_checkboxes.clear()
+        
+        # Create checkboxes for each table
+        for table_name, table_entries in entries_by_table.items():
+            checkbox = QCheckBox(f"{table_name} ({len(table_entries)} entries)")
+            checkbox.setChecked(True)  # Checked by default
+            self.table_checkboxes_layout.addWidget(checkbox)
+            self.table_checkboxes[table_name] = checkbox
+        
+        # Show the table selection UI if there are tables
+        if entries_by_table:
+            self.table_summary_label.setVisible(True)
+            self.table_checkboxes_widget.setVisible(True)
+        else:
+            self.table_summary_label.setVisible(False)
+            self.table_checkboxes_widget.setVisible(False)
 
     def _on_browse_export_path(self):
         """Select export directory (or file path)."""
@@ -543,52 +604,90 @@ class ParserDialog(QDialog):
                 self.progress_bar.setValue(int((current / total) * 100))
         
         try:
-            result = sheets_writer.write_entries(self.table_name, self.entries, start_row, progress_callback=update_progress)
+            # Group entries by their automatically detected table_name
+            from collections import defaultdict
+            entries_by_table = defaultdict(list)
+            for entry in self.entries:
+                table_name = entry.table_name or 'ЗМІ 2025'  # Fallback if not set
+                entries_by_table[table_name].append(entry)
             
-            if result['success']:
-                # Mark dates as parsed
-                for entry in self.entries:
-                    if entry.date:
-                        self.db_manager.mark_date_parsed(self.table_name, entry.date)
+            # Filter by selected tables only
+            selected_tables = {
+                table_name for table_name, checkbox in self.table_checkboxes.items()
+                if checkbox.isChecked()
+            }
+            
+            if not selected_tables:
+                QMessageBox.warning(
+                    self,
+                    "No Tables Selected",
+                    "Please select at least one table to write to."
+                )
+                return
+            
+            # Write entries to each selected table separately
+            total_written = 0
+            total_failed = []
+            results_by_table = {}
+            
+            for table_name, table_entries in entries_by_table.items():
+                # Skip if table not selected
+                if table_name not in selected_tables:
+                    logger.info(f"Skipping table '{table_name}' (not selected)")
+                    print(f"[WRITE] Skipping table '{table_name}' (not selected)")
+                    continue
+                logger.info(f"Writing {len(table_entries)} entries to table '{table_name}'")
+                print(f"[WRITE] Writing {len(table_entries)} entries to table '{table_name}'")
                 
+                result = sheets_writer.write_entries(
+                    table_name, 
+                    table_entries, 
+                    start_row, 
+                    progress_callback=update_progress
+                )
+                results_by_table[table_name] = result
+                total_written += result['written']
+                # Add table name to failed entries for better error reporting
+                for failed_entry in result['failed']:
+                    failed_entry['table'] = table_name
+                total_failed.extend(result['failed'])
+                
+                # Mark dates as parsed for this table
+                if result['success']:
+                    for entry in table_entries:
+                        if entry.date:
+                            self.db_manager.mark_date_parsed(table_name, entry.date)
+            
+            # Show summary
+            if total_failed:
+                failed_count = len(total_failed)
+                reply = QMessageBox.question(
+                    self,
+                    "Partial Success",
+                    f"Wrote {total_written} entries across {len(entries_by_table)} table(s), "
+                    f"but {failed_count} failed.\n\n"
+                    "Do you want to see error details?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    # Show error details
+                    error_details = "\n".join([
+                        f"Table {err.get('table', 'unknown')}, Row {err.get('row', 'unknown')}: {err.get('error', 'unknown error')}"
+                        for err in total_failed[:20]  # Limit to first 20 errors
+                    ])
+                    if len(total_failed) > 20:
+                        error_details += f"\n... and {len(total_failed) - 20} more errors"
+                    QMessageBox.warning(self, "Failed Entries", error_details)
+            else:
+                table_names = ", ".join(entries_by_table.keys())
                 QMessageBox.information(
                     self,
                     "Success",
-                    f"Successfully wrote {result['written']} entries to Google Sheets."
+                    f"Successfully wrote {total_written} entries to {len(entries_by_table)} table(s):\n{table_names}"
                 )
-                self.accept()
-            else:
-                # Handle partial success
-                failed_count = len(result['failed'])
-                if failed_count > 0:
-                    reply = QMessageBox.question(
-                        self,
-                        "Partial Success",
-                        f"Wrote {result['written']} entries, but {failed_count} failed.\n\n"
-                        "Do you want to continue and see error details?",
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                    )
-                    
-                    if reply == QMessageBox.StandardButton.Yes:
-                        # Show error details
-                        error_details = "\n".join([
-                            f"Row {err['row']}: {err['error']}"
-                            for err in result['failed']
-                        ])
-                        QMessageBox.warning(self, "Failed Entries", error_details)
-                    
-                    # Mark successful dates
-                    successful_entries = [e for e in self.entries if e not in [f['entry'] for f in result['failed']]]
-                    for entry in successful_entries:
-                        if entry.date:
-                            self.db_manager.mark_date_parsed(self.table_name, entry.date)
-                else:
-                    QMessageBox.information(
-                        self,
-                        "Success",
-                        f"Successfully wrote {result['written']} entries to Google Sheets."
-                    )
-                    self.accept()
+            
+            self.accept()
         
         except Exception as e:
             reply = QMessageBox.question(

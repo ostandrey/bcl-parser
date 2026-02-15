@@ -6,7 +6,7 @@ from datetime import date, datetime
 from typing import List, Optional, Dict
 from playwright.async_api import async_playwright, Page, Browser, BrowserContext
 from ..database.models import ParsedEntry
-from ..config import detect_table_from_link, detect_social_network_from_link, SOCIAL_NETWORK_OPTIONS
+from ..config import detect_table_from_link, detect_table_from_entry, detect_social_network_from_link, SOCIAL_NETWORK_OPTIONS, TAG_OPTIONS
 
 
 class YouScanParser:
@@ -641,145 +641,6 @@ class YouScanParser:
                 print(f"[ERROR] Fallback navigation also failed: {fallback_error}")
                 raise
     
-    def _navigate_to_big_city_lab(self):
-        """Navigate to Big City Lab theme mentions page."""
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        try:
-            # First, make sure we're on the themes page
-            current_url = self.page.url
-            logger.info(f"Current URL before navigation: {current_url}")
-            print(f"[INFO] Current URL before navigation: {current_url}")
-            
-            if '/themes' not in current_url:
-                logger.info("Not on themes page, navigating to themes")
-                print("[INFO] Not on themes page, navigating to themes")
-                self.page.goto(f"{self.BASE_URL}/themes", wait_until='load', timeout=30000)
-                time.sleep(3)
-            
-            # Look for Big City Lab theme - try multiple strategies
-            logger.info("Looking for Big City Lab theme")
-            print("[INFO] Looking for Big City Lab theme")
-            
-            # Strategy 1: Use Playwright's get_by_text (most reliable)
-            theme_clicked = False
-            try:
-                logger.debug("Trying Playwright get_by_text('Big City Lab')")
-                print("[DEBUG] Trying Playwright get_by_text('Big City Lab')")
-                theme_locator = self.page.get_by_text("Big City Lab", exact=True).first
-                if theme_locator.is_visible(timeout=5000):
-                    logger.info("Found Big City Lab using get_by_text")
-                    print("[INFO] Found Big City Lab using get_by_text")
-                    theme_locator.click()
-                    theme_clicked = True
-                    time.sleep(3)
-            except Exception as e:
-                logger.debug(f"get_by_text failed: {e}")
-                print(f"[DEBUG] get_by_text failed: {e}")
-            
-            # Strategy 2: Try other selectors
-            if not theme_clicked:
-                theme_selectors = [
-                    'text="Big City Lab"',
-                    'a:has-text("Big City Lab")',
-                    'div:has-text("Big City Lab")',
-                    '[href*="347025"]',
-                    'a[href*="/themes/347025"]',
-                ]
-                
-                for selector in theme_selectors:
-                    try:
-                        logger.debug(f"Trying selector: {selector}")
-                        print(f"[DEBUG] Trying selector: {selector}")
-                        element = self.page.wait_for_selector(selector, timeout=3000, state='visible')
-                        if element:
-                            logger.info(f"Found Big City Lab with selector: {selector}")
-                            print(f"[INFO] Found Big City Lab with selector: {selector}")
-                            
-                            # Try to click it
-                            try:
-                                element.click()
-                                logger.info("Clicked on Big City Lab theme")
-                                print("[INFO] Clicked on Big City Lab theme")
-                                theme_clicked = True
-                                time.sleep(3)
-                                break
-                            except Exception as click_error:
-                                logger.debug(f"Click failed: {click_error}, trying parent or coordinates")
-                                print(f"[DEBUG] Click failed, trying parent or coordinates")
-                                # Try clicking parent
-                                try:
-                                    parent = element.evaluate_handle('el => el.closest("a") || el.closest("div[role="button"]") || el.parentElement')
-                                    if parent:
-                                        parent.click()
-                                        theme_clicked = True
-                                        time.sleep(3)
-                                        break
-                                except:
-                                    # Try clicking by coordinates
-                                    try:
-                                        box = element.bounding_box()
-                                        if box:
-                                            logger.info("Clicking by coordinates")
-                                            print("[INFO] Clicking by coordinates")
-                                            self.page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                                            theme_clicked = True
-                                            time.sleep(3)
-                                            break
-                                    except:
-                                        continue
-                    except Exception as e:
-                        logger.debug(f"Selector {selector} failed: {e}")
-                        continue
-            
-            # Strategy 2: If clicking didn't work, try direct navigation
-            if not theme_clicked:
-                logger.info("Could not click theme, trying direct navigation")
-                print("[INFO] Could not click theme, trying direct navigation")
-                self.page.goto(self.MENTIONS_URL, wait_until='load', timeout=30000)
-                time.sleep(3)
-            else:
-                # After clicking, check if we need to navigate to mentions
-                current_url = self.page.url
-                logger.info(f"URL after clicking theme: {current_url}")
-                print(f"[INFO] URL after clicking theme: {current_url}")
-                
-                # If we're on theme page but not mentions, navigate to mentions
-                if '/themes/347025' in current_url and '/mentions' not in current_url:
-                    logger.info("On theme page, navigating to mentions")
-                    print("[INFO] On theme page, navigating to mentions")
-                    self.page.goto(self.MENTIONS_URL, wait_until='load', timeout=30000)
-                    time.sleep(3)
-            
-            # Verify we're on the mentions page
-            final_url = self.page.url
-            logger.info(f"Final URL: {final_url}")
-            print(f"[INFO] Final URL: {final_url}")
-            
-            if '/mentions' in final_url or '/themes/347025' in final_url:
-                logger.info("Successfully navigated to Big City Lab mentions page")
-                print("[INFO] Successfully navigated to Big City Lab mentions page")
-            else:
-                logger.warning(f"May not be on correct page. URL: {final_url}")
-                print(f"[WARNING] May not be on correct page. URL: {final_url}")
-                
-        except Exception as e:
-            logger.exception("Error navigating to Big City Lab")
-            print(f"[ERROR] Error navigating to Big City Lab: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            # Try direct URL as fallback
-            try:
-                logger.info("Trying direct URL as fallback")
-                print("[INFO] Trying direct URL as fallback")
-                self.page.goto(self.MENTIONS_URL, wait_until='load', timeout=30000)
-                time.sleep(3)
-            except Exception as fallback_error:
-                logger.error(f"Fallback navigation also failed: {fallback_error}")
-                print(f"[ERROR] Fallback navigation also failed: {fallback_error}")
-                raise
-    
     async def set_date_range_async(self, date_from: date, date_to: date):
         """Set date range in the date picker (async version)."""
         import logging
@@ -1042,21 +903,6 @@ class YouScanParser:
         # Wait for page to update after date change
         await asyncio.sleep(2)
     
-    def set_date_range(self, date_from: date, date_to: date):
-        """Set date range in the date picker (sync wrapper - deprecated, use async version)."""
-        # This is a fallback - should use async version in threads
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If in thread, create task
-                asyncio.create_task(self.set_date_range_async(date_from, date_to))
-            else:
-                loop.run_until_complete(self.set_date_range_async(date_from, date_to))
-        except:
-            # Fallback to sync (will fail in thread)
-            pass
-    
     async def parse_all_entries_async(self, target_date: date) -> List[ParsedEntry]:
         """Parse all entries for a given date (async version)."""
         import logging
@@ -1123,6 +969,11 @@ class YouScanParser:
         
         logger.info(f"Finished parsing: {len(entries)} total entries")
         print(f"[INFO] Finished parsing: {len(entries)} total entries")
+        
+        # Reverse all entries to show oldest first (chronological order)
+        # Website shows newest first, but we want oldest first in the table
+        entries.reverse()
+        logger.debug(f"Reversed all entries: now showing oldest first (chronological order)")
         
         return entries
     
@@ -1217,46 +1068,103 @@ class YouScanParser:
                 print(f"[INFO] Found {len(numeric_ids)} entries with numeric IDs")
                 
                 # Use the more reliable method: Query all divs with IDs and filter by numeric_ids
-                # This is more reliable than querying each ID individually
+                # IMPORTANT: Get elements in DOM order to preserve visual order from page
                 try:
-                    all_divs_with_ids = await self.page.query_selector_all('div[id]')
-                    logger.debug(f"Found {len(all_divs_with_ids)} divs with id attribute")
-                    numeric_ids_set = set(numeric_ids)
+                    # Get all entry divs in DOM order using JavaScript
+                    # This ensures entries are in the same order as they appear visually on the page
+                    entry_ids_ordered = await self.page.evaluate("""
+                        (numericIds) => {
+                            const numericIdsSet = new Set(numericIds);
+                            const allDivs = Array.from(document.querySelectorAll('div[id]'));
+                            const entryIds = [];
+                            
+                            // Collect IDs in DOM order (as they appear on page)
+                            for (const div of allDivs) {
+                                const id = div.getAttribute('id');
+                                if (id && numericIdsSet.has(id)) {
+                                    entryIds.push(id);
+                                }
+                            }
+                            
+                            return entryIds;
+                        }
+                    """, numeric_ids)
                     
-                    for div in all_divs_with_ids:
+                    # Now query elements in the correct DOM order
+                    for entry_id in entry_ids_ordered:
                         try:
-                            div_id = await div.get_attribute('id')
-                            if div_id and div_id in numeric_ids_set:
-                                entry_elements.append(div)
+                            elem = await self.page.query_selector(f'div[id="{entry_id}"]')
+                            if elem:
+                                entry_elements.append(elem)
                         except:
                             continue
                     
+                    # Fallback: if JavaScript approach didn't work, use original method
+                    if not entry_elements:
+                        all_divs_with_ids = await self.page.query_selector_all('div[id]')
+                        logger.debug(f"Found {len(all_divs_with_ids)} divs with id attribute")
+                        numeric_ids_set = set(numeric_ids)
+                        
+                        for div in all_divs_with_ids:
+                            try:
+                                div_id = await div.get_attribute('id')
+                                if div_id and div_id in numeric_ids_set:
+                                    entry_elements.append(div)
+                            except:
+                                continue
+                    
                     if entry_elements:
-                        logger.info(f"Retrieved {len(entry_elements)} entries using bulk query method")
-                        print(f"[INFO] Retrieved {len(entry_elements)} entries using bulk query method")
+                        logger.info(f"Retrieved {len(entry_elements)} entries using bulk query method (in DOM order)")
+                        print(f"[INFO] Retrieved {len(entry_elements)} entries using bulk query method (in DOM order)")
                     else:
                         logger.warning(f"Found {len(numeric_ids)} numeric IDs but couldn't retrieve any elements")
                         print(f"[WARNING] Found {len(numeric_ids)} numeric IDs but couldn't retrieve any elements")
                 except Exception as bulk_error:
-                    logger.debug(f"Bulk query method failed: {bulk_error}, trying individual queries")
-                    # Fallback: Try individual queries
-                    for entry_id in numeric_ids:
-                        try:
-                            # Use CSS selector with ID - escape special characters if needed
-                            elem = await self.page.query_selector(f'div#{entry_id}')
-                            if elem:
-                                entry_elements.append(elem)
-                            else:
-                                # Try alternative: query by attribute
+                    logger.debug(f"Bulk query method failed: {bulk_error}, trying individual queries in DOM order")
+                    # Fallback: Try individual queries, but get them in DOM order
+                    try:
+                        # Get IDs in DOM order first
+                        entry_ids_ordered = await self.page.evaluate("""
+                            (numericIds) => {
+                                const numericIdsSet = new Set(numericIds);
+                                const allDivs = Array.from(document.querySelectorAll('div[id]'));
+                                const entryIds = [];
+                                
+                                // Collect IDs in DOM order (as they appear on page)
+                                for (const div of allDivs) {
+                                    const id = div.getAttribute('id');
+                                    if (id && numericIdsSet.has(id)) {
+                                        entryIds.push(id);
+                                    }
+                                }
+                                
+                                return entryIds;
+                            }
+                        """, numeric_ids)
+                        
+                        # Query elements in DOM order
+                        for entry_id in entry_ids_ordered:
+                            try:
                                 elem = await self.page.query_selector(f'div[id="{entry_id}"]')
                                 if elem:
                                     entry_elements.append(elem)
-                        except Exception as e:
-                            logger.debug(f"Error getting element with ID {entry_id}: {e}")
-                            continue
+                            except Exception as e:
+                                logger.debug(f"Error getting element with ID {entry_id}: {e}")
+                                continue
+                    except:
+                        # Final fallback: query in original order
+                        for entry_id in numeric_ids:
+                            try:
+                                elem = await self.page.query_selector(f'div[id="{entry_id}"]')
+                                if elem:
+                                    entry_elements.append(elem)
+                            except Exception as e:
+                                logger.debug(f"Error getting element with ID {entry_id}: {e}")
+                                continue
+                    
                     if entry_elements:
-                        logger.info(f"Retrieved {len(entry_elements)} valid entry elements using individual queries")
-                        print(f"[INFO] Retrieved {len(entry_elements)} valid entry elements using individual queries")
+                        logger.info(f"Retrieved {len(entry_elements)} valid entry elements using individual queries (in DOM order)")
+                        print(f"[INFO] Retrieved {len(entry_elements)} valid entry elements using individual queries (in DOM order)")
         except Exception as e:
             logger.debug(f"JavaScript-based entry finding failed: {e}")
             import traceback
@@ -1403,6 +1311,7 @@ class YouScanParser:
             ]
             
             name_text = ''
+            name_elem = None  # Store the element for clicking later
             for selector in name_selectors:
                 try:
                     name_elem = await entry_elem.query_selector(selector)
@@ -1422,6 +1331,9 @@ class YouScanParser:
                     match = re.search(r'^([А-ЯІЇЄҐа-яіїєґ\s]+?)\s+(відповіла|відповів|залишив|поділив)', full_text)
                     if match:
                         name_text = match.group(1).strip()
+                        # Try to find the element again with the matched text
+                        if name_text:
+                            name_elem = await entry_elem.query_selector(f'span:has-text("{name_text}")')
                 except:
                     pass
             
@@ -1430,30 +1342,43 @@ class YouScanParser:
             # 2. Parse social network link and name
             # Structure: <a href="https://www.facebook.com/..." class="j0EW2HMfFh3MvBbwygOB">2 січня 2026 р., 14:37</a>
             # The date link contains the actual post URL
-            link_elem = await entry_elem.query_selector('a.j0EW2HMfFh3MvBbwygOB, a[href*="facebook"], a[href*="instagram"], a[href*="twitter"], a[href*="linkedin"], a[href*="youtube"], a[href*="t.me"], a[href*="tiktok"], a[href*="threads"], a[href*="soundcloud"]')
+            link_elem = await entry_elem.query_selector('a.j0EW2HMfFh3MvBbwygOB, a[href*="facebook"], a[href*="instagram"], a[href*="twitter"], a[href*="linkedin"], a[href*="youtube"], a[href*="t.me"], a[href*="telegram.me"], a[href*="telegram"], a[href*="tiktok"], a[href*="threads"], a[href*="soundcloud"]')
             
             if link_elem:
                 link_href = await link_elem.get_attribute('href') or ''
                 entry.link = link_href
                 entry.social_network = detect_social_network_from_link(link_href)
-                entry.table_name = detect_table_from_link(link_href)
+                logger.debug(f"Found link: {link_href}, social network: {entry.social_network}")
+                print(f"[LINK] Found link: {link_href}, social network: {entry.social_network}")
             else:
                 # Fallback: Look for social network name in span
                 # Structure: <span class="FnMtmUa9bs__3sxIz_4N BgNMJrrsKXup73BhMooc">facebook.com</span>
+                # Or: <span class="FnMtmUa9bs__3sxIz_4N BgNMJrrsKXup73BhMooc">telegram.me</span>
                 social_span = await entry_elem.query_selector('span.FnMtmUa9bs__3sxIz_4N, span[class*="FnMtmUa9bs"]')
                 if social_span:
                     social_text = (await social_span.inner_text()).strip()
                     if social_text:
-                        domain = social_text.replace('.com', '').strip()
+                        # Clean up the text (remove any extra whitespace)
+                        social_text = social_text.strip()
                         entry.social_network = detect_social_network_from_link(f"https://{social_text}")
-                        entry.table_name = detect_table_from_link(f"https://{social_text}")
+                        logger.info(f"Found social network from span: {social_text}, detected: {entry.social_network}")
+                        print(f"[LINK] Found social network from span: '{social_text}', detected: {entry.social_network}")
+                
+                # Additional fallback: Search for social network names in entry text
+                if not entry.social_network:
+                    entry_text = await entry_elem.inner_text()
+                    entry_text_lower = entry_text.lower()
+                    # Check for Telegram (both t.me and telegram.me)
+                    if 't.me' in entry_text_lower or 'telegram.me' in entry_text_lower or 'telegram' in entry_text_lower:
+                        entry.social_network = 'Telegram'
+                        logger.info(f"Detected Telegram from entry text")
+                        print(f"[LINK] Detected Telegram from entry text")
             
             # 3. Get link via share button (if not found above)
             if not entry.link:
                 entry.link = await self._get_link_via_share_button_async(entry_elem)
                 if entry.link:
                     entry.social_network = detect_social_network_from_link(entry.link)
-                    entry.table_name = detect_table_from_link(entry.link)
             
             # 4. Parse tags (Тема) - get first one
             tags = await self._parse_tags_async(entry_elem)
@@ -1463,8 +1388,13 @@ class YouScanParser:
             # Structure: <p class="VqFKkdgOknQMdibReX6Y"> and <span class="Q73iQ9Oh3QBkbjh10U6t WJIiADpYvnCJ14uuC16a">
             entry.note = await self._parse_note_async(entry_elem)
             
-            # 6. Parse user description (Хто це) - click @username
-            entry.description = await self._parse_user_description_async(entry_elem)
+            # 6. Parse user description (Хто це) - click on username
+            entry.description = await self._parse_user_description_async(entry_elem, name_elem)
+            
+            # 7. Determine table name based on entry (year-based)
+            entry.table_name = detect_table_from_entry(entry)
+            logger.debug(f"Determined table name: {entry.table_name} for entry date: {entry.date}")
+            print(f"[TABLE] Determined table name: {entry.table_name} for entry date: {entry.date}")
             
             return entry
             
@@ -1540,74 +1470,350 @@ class YouScanParser:
             return ''
     
     async def _parse_tags_async(self, entry_elem) -> List[str]:
-        """Parse tags from entry - return first one that matches dropdown options (async version)."""
-        tags = []
+        """
+        Parse tags from entry - match against dropdown options, or return original if no match (async version).
         
-        # Known tags from Google Sheets dropdown (from screenshots)
-        known_tags = [
-            'Активні парки',
-            'Альбом бб рішень',
-            'ББ маршрути',
-            'ББ укриття',
-            'Безбар\'єрність',
-            'Вакансії',
-            'Витачів',
-            'КИТ Кураж',
-            'Локо Сіті',
-            'M86',
-            'НУШ',
-            'Облаштування житла',
-            'Профтех',
-            'Профтех Славутич',
-            'Психкімнати',
-            'ПУМБ',
-            'Соцжитло',
-            'Терсад',
-            'Word of Mouth',
-            'Питання',
-            'Ціна',
-        ]
+        Behavior matches social network dropdown:
+        - Try to match found tags to dropdown options (exact, starts-with, contains)
+        - If match found: use dropdown option value
+        - If no match: use original tag text (inserted as-is, user can change via dropdown in Google Sheets)
         
-        # Look for tag elements in the UI
+        HTML Structure:
+        <div class="izj773vLNpCIfNBWnzoQ">
+          <div class="kUy1sArwGFcGCnoB7ZWg">  <!-- FIRST div - contains "Стаття" - SKIP THIS -->
+            <span>Стаття</span>
+          </div>
+          <div class="RynAcp3UczxMoGCp6Syp"></div>  <!-- Separator -->
+          <div class="l9Xop4gL9H3TgNeRAp2A">  <!-- LAST div - contains actual tag -->
+            <div class="OcLjtVuWbx7moLWcbJE7">
+              <span class="OTyF8q64v3qb6duzmTqb vw5KNeEyWubpzCogpt41">ББ маршрути</span>
+            </div>
+          </div>
+        </div>
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        found_tags = []  # Store original tag text found in UI
+        matched_tags = []  # Store matched dropdown options
+        
+        # Strategy 1: Use JavaScript to find tags in ALL child divs of izj773vLNpCIfNBWnzoQ (except first one with "Стаття")
+        # Based on actual HTML: structure is izj773vLNpCIfNBWnzoQ -> kUy1sArwGFcGCnoB7ZWg (Стаття) -> RynAcp3UczxMoGCp6Syp (separator) -> l9Xop4gL9H3TgNeRAp2A (tag)
+        try:
+            tag_texts = await entry_elem.evaluate("""
+                (tagOptions) => {
+                    const found = [];
+                    // Find divs with class izj773vLNpCIfNBWnzoQ (stable container)
+                    const tagWrappers = this.querySelectorAll('div[class*="izj773vLNpCIfNBWnzoQ"]');
+                    for (const wrapper of tagWrappers) {
+                        // Get all direct child divs (not nested)
+                        const childDivs = Array.from(wrapper.children).filter(el => el.tagName === 'DIV');
+                        if (childDivs.length === 0) continue;
+                        
+                        // Check ALL child divs (skip first one which usually has "Стаття")
+                        // Start from index 1 to skip the first div
+                        for (let i = 1; i < childDivs.length; i++) {
+                            const childDiv = childDivs[i];
+                            
+                            // Skip empty separator divs (like RynAcp3UczxMoGCp6Syp)
+                            const divText = childDiv.textContent.trim();
+                            if (!divText || divText.length === 0) continue;
+                            
+                            // Check if this div contains "Стаття" - if so, skip it
+                            if (divText.includes('Стаття') && divText.length < 20) {
+                                continue; // Skip divs that only contain "Стаття"
+                            }
+                            
+                            // Find ALL spans in this div - don't rely on specific container classes
+                            const spans = childDiv.querySelectorAll('span');
+                            for (const span of spans) {
+                                const text = span.textContent.trim();
+                                
+                                // Skip empty, single chars, close icons, and "Стаття"
+                                if (!text || text === 'x' || text === 'X' || text === 'Стаття' || text.length < 2) continue;
+                                
+                                // Skip if it's inside a button (like "Додати тег")
+                                if (span.closest('button')) continue;
+                                
+                                // Skip if it's just an icon (has icon but no text)
+                                const hasIcon = span.querySelector('i.mdi');
+                                if (hasIcon) {
+                                    // Check if span has actual text content (not just icon)
+                                    const textNodes = Array.from(span.childNodes).filter(n => n.nodeType === 3 && n.textContent.trim());
+                                    if (textNodes.length === 0) continue;
+                                }
+                                
+                                // This looks like a tag - add it
+                                if (!found.includes(text)) {
+                                    found.push(text);
+                                }
+                            }
+                        }
+                    }
+                    return found;
+                }
+            """, TAG_OPTIONS)
+            
+            if tag_texts and len(tag_texts) > 0:
+                for tag_text in tag_texts:
+                    if tag_text not in found_tags:
+                        found_tags.append(tag_text)
+                logger.info(f"Found tags via JavaScript (last div method): {tag_texts}")
+                print(f"[TAG] Found tags via JavaScript: {tag_texts}")
+        except Exception as e:
+            logger.debug(f"JavaScript tag extraction failed: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        # Strategy 2: CSS selector approach - check ALL child divs (skip first one with "Стаття")
+        try:
+            # Find izj773vLNpCIfNBWnzoQ containers
+            tag_wrappers = await entry_elem.query_selector_all('div[class*="izj773vLNpCIfNBWnzoQ"]')
+            for wrapper in tag_wrappers:
+                try:
+                    # Get all direct child divs
+                    child_divs = await wrapper.query_selector_all(':scope > div')
+                    if child_divs and len(child_divs) > 0:
+                        # Check ALL child divs starting from index 1 (skip first one which has "Стаття")
+                        for i in range(1, len(child_divs)):
+                            child_div = child_divs[i]
+                            
+                            # Skip empty separator divs (like RynAcp3UczxMoGCp6Syp)
+                            div_text = (await child_div.inner_text()).strip()
+                            if not div_text or len(div_text) == 0:
+                                continue  # Skip empty separator divs
+                            
+                            # Check if this div contains "Стаття" - if so, skip it
+                            if 'Стаття' in div_text and len(div_text) < 20:
+                                continue  # Skip divs that only contain "Стаття"
+                            
+                            # Find ALL spans in this div - don't rely on specific container classes
+                            spans = await child_div.query_selector_all('span')
+                            for span in spans:
+                                tag_text = (await span.inner_text()).strip()
+                                # Skip "Стаття", empty, single chars, close icons
+                                if not tag_text or tag_text == 'Стаття' or tag_text in ['x', 'X'] or len(tag_text) < 2:
+                                    continue
+                                # Skip if it's inside a button
+                                try:
+                                    is_in_button = await span.evaluate('el => el.closest("button") !== null')
+                                    if is_in_button:
+                                        continue
+                                except:
+                                    pass
+                                # Skip if it's just an icon
+                                try:
+                                    has_icon = await span.query_selector('i.mdi')
+                                    if has_icon:
+                                        # Check if span has actual text content
+                                        text_content = await span.evaluate('el => Array.from(el.childNodes).filter(n => n.nodeType === 3 && n.textContent.trim()).length')
+                                        if text_content == 0:
+                                            continue
+                                except:
+                                    pass
+                                if tag_text not in found_tags:
+                                    found_tags.append(tag_text)
+                                    logger.info(f"Found tag in child div {i} (CSS method): {tag_text}")
+                                    print(f"[TAG] Found tag via CSS (div {i}): {tag_text}")
+                except Exception as e:
+                    logger.debug(f"Error extracting tag from wrapper: {e}")
+                    continue
+        except Exception as e:
+            logger.debug(f"CSS tag container extraction failed: {e}")
+        
+        # Strategy 3: Direct CSS selectors targeting the last div structure (additional check)
         tag_selectors = [
-            'button:has-text("Додати тег")',
-            '[class*="tag"]',
-            '[data-tag]',
-            '[class*="Tag"]',
+            'div[class*="izj773vLNpCIfNBWnzoQ"] > div:last-child span',  # Last child -> any span
+            'div[class*="l9Xop4gL9H3TgNeRAp2A"] span',  # Last div class -> any span
         ]
         
         entry_text = await entry_elem.inner_text()
         
-        # First, try to find tags in the UI (button text, tag elements)
+        # Try CSS selectors as additional check (always run, not just as fallback)
         for selector in tag_selectors:
-            tag_elements = await entry_elem.query_selector_all(selector)
-            for tag_elem in tag_elements:
-                tag_text = (await tag_elem.inner_text()).strip()
-                # Remove "Додати тег" button text
-                if tag_text and tag_text != 'Додати тег':
-                    # Check if it matches known tags
-                    for known_tag in known_tags:
-                        if known_tag.lower() in tag_text.lower() or tag_text.lower() in known_tag.lower():
-                            if known_tag not in tags:
-                                tags.append(known_tag)
-                                break
+            try:
+                tag_elements = await entry_elem.query_selector_all(selector)
+                for tag_elem in tag_elements:
+                    tag_text = (await tag_elem.inner_text()).strip()
+                    # Skip "Стаття", "Додати тег", empty, single chars
+                    if tag_text and tag_text != 'Стаття' and tag_text != 'Додати тег' and tag_text not in ['x', 'X'] and len(tag_text) > 1:
+                        # Skip if it's inside a button
+                        try:
+                            is_in_button = await tag_elem.evaluate('el => el.closest("button") !== null')
+                            if is_in_button:
+                                continue
+                        except:
+                            pass
+                        if tag_text not in found_tags:
+                            found_tags.append(tag_text)
+                            logger.info(f"Found tag via selector {selector}: {tag_text}")
+                            print(f"[TAG] Found tag via fallback selector: {tag_text}")
+            except Exception as e:
+                logger.debug(f"Selector {selector} failed: {e}")
+                continue
         
-        # If no tags found in UI, search in entry text
-        if not tags:
-            for known_tag in known_tags:
-                # Check if tag appears in entry text
-                if known_tag.lower() in entry_text.lower():
-                    tags.append(known_tag)
-                    break  # Only first matching tag
+        # Strategy 4: Direct search for each dropdown option in izj773vLNpCIfNBWnzoQ containers
+        # This is a more direct approach - search for spans containing tag text that matches dropdown options
+        try:
+            for tag_option in TAG_OPTIONS:
+                # Skip if we already found this tag
+                tag_option_lower = tag_option.lower().strip()
+                already_found = any(found.lower().strip() == tag_option_lower for found in found_tags)
+                if already_found:
+                    continue
+                
+                # Search for this tag option in spans within izj773vLNpCIfNBWnzoQ containers
+                tag_found = await entry_elem.evaluate("""
+                    (tagOption) => {
+                        const containers = this.querySelectorAll('div[class*="izj773vLNpCIfNBWnzoQ"]');
+                        for (const container of containers) {
+                            // Get all child divs, skip first one
+                            const childDivs = Array.from(container.children).filter(el => el.tagName === 'DIV');
+                            for (let i = 1; i < childDivs.length; i++) {
+                                const childDiv = childDivs[i];
+                                // Skip empty or "Стаття" divs
+                                const divText = childDiv.textContent.trim();
+                                if (!divText || (divText.includes('Стаття') && divText.length < 20)) continue;
+                                
+                                // Find spans in this div
+                                const spans = childDiv.querySelectorAll('span');
+                                for (const span of spans) {
+                                    const text = span.textContent.trim();
+                                    // Skip if it's in a button
+                                    if (span.closest('button')) continue;
+                                    // Skip empty, single chars, "Стаття"
+                                    if (!text || text === 'x' || text === 'X' || text === 'Стаття' || text.length < 2) continue;
+                                    
+                                    // Check if this span text matches or contains the tag option
+                                    const textLower = text.toLowerCase();
+                                    const tagLower = tagOption.toLowerCase();
+                                    // Exact match or tag option is contained in text (e.g., "Терсад" in "Терсад ВДНГ")
+                                    // or text is contained in tag option
+                                    if (textLower === tagLower || textLower.includes(tagLower) || tagLower.includes(textLower)) {
+                                        return text; // Return the actual text found
+                                    }
+                                }
+                            }
+                        }
+                        return null;
+                    }
+                """, tag_option)
+                
+                if tag_found and tag_found not in found_tags:
+                    found_tags.append(tag_found)
+                    logger.info(f"Found tag '{tag_found}' matching dropdown option '{tag_option}' (Strategy 4)")
+                    print(f"[TAG] Found tag '{tag_found}' matching dropdown option '{tag_option}' (Strategy 4)")
+        except Exception as e:
+            logger.debug(f"Strategy 4 (direct tag search) failed: {e}")
+            import traceback
+            traceback.print_exc()
         
-        return tags
+        # Now match found tags against dropdown options with improved logic
+        for found_tag in found_tags:
+            found_tag_lower = found_tag.lower().strip()
+            best_match = None
+            best_match_score = 0
+            
+            # Try to find the best match
+            for tag_option in TAG_OPTIONS:
+                tag_option_lower = tag_option.lower().strip()
+                
+                # Score 3: Exact match (case-insensitive)
+                if tag_option_lower == found_tag_lower:
+                    best_match = tag_option
+                    best_match_score = 3
+                    break
+                
+                # Score 2: Found tag starts with dropdown option (e.g., "Терсад ВДНГ" starts with "Терсад")
+                if found_tag_lower.startswith(tag_option_lower + ' ') or found_tag_lower.startswith(tag_option_lower):
+                    if best_match_score < 2:
+                        best_match = tag_option
+                        best_match_score = 2
+                
+                # Score 1: Dropdown option is contained in found tag (e.g., "ББ маршрути" in "ББ Маршрути")
+                elif tag_option_lower in found_tag_lower:
+                    if best_match_score < 1:
+                        best_match = tag_option
+                        best_match_score = 1
+                
+                # Score 0.5: Found tag is contained in dropdown option
+                elif found_tag_lower in tag_option_lower:
+                    if best_match_score < 0.5:
+                        best_match = tag_option
+                        best_match_score = 0.5
+            
+            if best_match and best_match not in matched_tags:
+                # Use matched dropdown option (same behavior as social network dropdown)
+                matched_tags.append(best_match)
+                logger.debug(f"Matched '{found_tag}' -> '{best_match}' (score: {best_match_score})")
+            elif not best_match:
+                # No match found - use original tag text (will be inserted as-is, user can change via dropdown)
+                # Same behavior as social network: if no match, still write the value so user can change it later
+                if found_tag not in matched_tags:
+                    matched_tags.append(found_tag)
+                    logger.debug(f"No match for '{found_tag}', using original (user can change via dropdown)")
+        
+        # Log final results
+        if matched_tags:
+            logger.info(f"Final matched tags: {matched_tags}")
+            print(f"[TAG] Final matched tags: {matched_tags}")
+        elif found_tags:
+            logger.warning(f"Found tags but no matches: {found_tags}")
+            print(f"[TAG] Found tags but no matches: {found_tags}")
+        else:
+            logger.warning("No tags found for this entry")
+            print(f"[TAG] No tags found for this entry")
+        
+        # Return all matched tags (not just first one)
+        # Note: We take the first tag when assigning to entry.tag, and return all for flexibility
+        return matched_tags
     
     async def _parse_note_async(self, entry_elem) -> str:
-        """Parse note (Примітки) - main text content (async version)."""
-        # Structure: <p class="VqFKkdgOknQMdibReX6Y"> and <span class="Q73iQ9Oh3QBkbjh10U6t WJIiADpYvnCJ14uuC16a">
+        """Parse note (Примітки) - extract text after username from div.e99EkRyEQ2YU1HjaKz7j (async version)."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         note_parts = []
         
-        # Try to find the main text paragraph
+        # Primary method: Extract text after username from div.e99EkRyEQ2YU1HjaKz7j
+        # Example: <div class="e99EkRyEQ2YU1HjaKz7j">Невідомий користувач<span> </span>відповів(ла) на коментар<span> </span><span>в<span> </span>...
+        # We want: "відповів(ла) на коментар в AXIOMA design"
+        try:
+            user_action_div = await entry_elem.query_selector('div.e99EkRyEQ2YU1HjaKz7j, div[class*="e99EkRyEQ2YU1HjaKz7j"]')
+            if user_action_div:
+                # Get the full HTML content
+                html_content = await user_action_div.inner_html()
+                
+                # Parse all text nodes and span contents, skipping the first text (username)
+                # Get inner text which will combine all text with spaces
+                full_text = (await user_action_div.inner_text()).strip()
+                
+                # Split by whitespace to separate parts
+                parts = full_text.split()
+                
+                # Try to identify username (usually first part or "Невідомий користувач")
+                # Skip username and collect the rest
+                if parts:
+                    # Check if first part looks like username (starts with capital or is "Невідомий")
+                    if parts[0] == "Невідомий" and len(parts) > 1 and parts[1] == "користувач":
+                        # Skip "Невідомий користувач"
+                        note_text = ' '.join(parts[2:])
+                    else:
+                        # Skip first part (username)
+                        note_text = ' '.join(parts[1:])
+                    
+                    if note_text:
+                        # Clean up engagement numbers like "1 тис."
+                        note_text = re.sub(r'\d+\s*тис\.', '', note_text).strip()
+                        # Remove redundant spaces
+                        note_text = re.sub(r'\s+', ' ', note_text).strip()
+                        
+                        if note_text:
+                            return note_text
+        except Exception as e:
+            logger.debug(f"Error extracting note from div.e99EkRyEQ2YU1HjaKz7j: {e}")
+        
+        # Fallback 1: Try to find the main text paragraph
         try:
             # Main text: <p class="VqFKkdgOknQMdibReX6Y">
             main_text_elem = await entry_elem.query_selector('p.VqFKkdgOknQMdibReX6Y, p[class*="VqFKkdgOknQMdibReX6Y"]')
@@ -1618,7 +1824,7 @@ class YouScanParser:
         except:
             pass
         
-        # Try to find additional text spans
+        # Fallback 2: Try to find additional text spans
         try:
             # Additional text: <span class="Q73iQ9Oh3QBkbjh10U6t WJIiADpYvnCJ14uuC16a">
             text_spans = await entry_elem.query_selector_all('span.Q73iQ9Oh3QBkbjh10U6t, span[class*="Q73iQ9Oh3QBkbjh10U6t"]')
@@ -1635,7 +1841,7 @@ class YouScanParser:
         except:
             pass
         
-        # Fallback: Look for main content area if specific classes not found
+        # Fallback 3: Look for main content area if specific classes not found
         if not note_parts:
             content_selectors = [
                 'div[class*="yOPHd5XCBg3vO0C9GJNN"]',  # Content wrapper class
@@ -1669,424 +1875,187 @@ class YouScanParser:
         
         return note_text
     
-    async def _parse_user_description_async(self, entry_elem) -> str:
-        """Parse user description by clicking @username (async version)."""
+    async def _parse_user_description_async(self, entry_elem, name_elem) -> str:
+        """Parse user description by clicking on username (async version)."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         try:
-            # Find @username mentions
-            entry_text = await entry_elem.inner_text()
-            username_pattern = r'@(\w+)'
-            matches = re.findall(username_pattern, entry_text)
+            # If no name element provided, try to find it
+            if not name_elem:
+                name_selectors = [
+                    'span.NR97fosTp2Dtw_WKVPAN',
+                    'span[class*="NR97fosTp2Dtw"]',
+                    'div[class*="e99EkRyEQ2YU1HjaKz7j"] span',
+                ]
+                for selector in name_selectors:
+                    try:
+                        name_elem = await entry_elem.query_selector(selector)
+                        if name_elem:
+                            name_text = (await name_elem.inner_text()).strip()
+                            if name_text and len(name_text) > 2:
+                                break
+                    except:
+                        continue
             
-            if not matches:
+            if not name_elem:
+                logger.debug("No username element found for description parsing")
                 return ''
             
-            # Click on first @username
-            username = matches[0]
-            username_elem = await entry_elem.query_selector(f'a:has-text("@{username}"), span:has-text("@{username}")')
+            # The username span might be inside a clickable parent div with aria-expanded="false"
+            # Use JavaScript to find and click the clickable parent element
+            clicked = False
+            try:
+                # Use JavaScript to find clickable parent and click it
+                clicked = await name_elem.evaluate("""
+                    (elem) => {
+                        // Try clicking the element itself first
+                        try {
+                            elem.click();
+                            return true;
+                        } catch (e) {
+                            // If that fails, find clickable parent
+                            let current = elem;
+                            for (let i = 0; i < 3; i++) {
+                                current = current.parentElement;
+                                if (!current) break;
+                                // Check if parent is clickable
+                                if (current.getAttribute('aria-expanded') !== null ||
+                                    current.getAttribute('role') === 'button' ||
+                                    current.tagName === 'BUTTON' ||
+                                    current.onclick ||
+                                    window.getComputedStyle(current).cursor === 'pointer') {
+                                    try {
+                                        current.click();
+                                        return true;
+                                    } catch (e2) {
+                                        // Continue searching
+                                    }
+                                }
+                            }
+                            // Last resort: try clicking original element via dispatchEvent
+                            try {
+                                const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true });
+                                elem.dispatchEvent(clickEvent);
+                                return true;
+                            } catch (e3) {
+                                return false;
+                            }
+                        }
+                    }
+                """)
+                
+                if clicked:
+                    logger.debug("Clicked on username element (or parent)")
+                    print(f"[DESC] Clicked on username element")
+                else:
+                    logger.debug("Could not click username element")
+                    return ''
+            except Exception as click_error:
+                logger.debug(f"Error clicking username: {click_error}")
+                return ''
             
-            if username_elem:
-                await username_elem.click()
-                await asyncio.sleep(1)
+            if clicked:
+                # Wait for modal to appear
+                await asyncio.sleep(1.5)  # Give time for modal to load
                 
-                # Look for description in popup/modal
-                description_selectors = [
-                    '[class*="description"]',
-                    '[class*="bio"]',
-                    '[class*="about"]',
-                    'p',
-                ]
+                # Look for modal/popup with role="dialog"
+                # The description is in a div with class like "jrnY5tmnFg128QMOKSyq"
+                modal = None
+                try:
+                    modal = await self.page.wait_for_selector(
+                        '[role="dialog"]',
+                        timeout=3000,
+                        state='visible'
+                    )
+                except:
+                    # Modal might not appear, try to find it anyway
+                    try:
+                        modal = await self.page.query_selector('[role="dialog"]')
+                    except:
+                        pass
                 
-                # Try to find modal/popup
-                modal = await self.page.query_selector('[role="dialog"], [class*="modal"], [class*="popup"]')
                 if modal:
+                    logger.debug("Modal found, searching for description")
+                    print(f"[DESC] Modal found, searching for description")
+                    
+                    # Try multiple strategies to find the description div
+                    description_selectors = [
+                        'div[class*="jrnY5tmnFg128QMOKSyq"]',  # Specific class from example
+                        'div[class*="jrnY5tmn"]',  # Partial match
+                        'div[class*="QMOKSyq"]',  # Another partial match
+                        '[class*="description"]',
+                        '[class*="bio"]',
+                        '[class*="about"]',
+                    ]
+                    
+                    desc_text = ''
                     for selector in description_selectors:
-                        desc_elem = await modal.query_selector(selector)
-                        if desc_elem:
-                            desc_text = (await desc_elem.inner_text()).strip()
-                            if desc_text:
-                                # Close modal
-                                close_btn = await self.page.query_selector('button[aria-label="Close"], button:has-text("×")')
+                        try:
+                            desc_elem = await modal.query_selector(selector)
+                            if desc_elem:
+                                desc_text = (await desc_elem.inner_text()).strip()
+                                if desc_text and len(desc_text) > 10:  # Must have substantial content
+                                    logger.info(f"Found description using selector: {selector}")
+                                    print(f"[DESC] Found description: {desc_text[:100]}...")
+                                    break
+                        except:
+                            continue
+                    
+                    # If not found with specific selectors, try to find any div with substantial text
+                    if not desc_text:
+                        try:
+                            # Look for divs with multiple spans (like the example structure)
+                            all_divs = await modal.query_selector_all('div')
+                            for div in all_divs:
+                                div_text = (await div.inner_text()).strip()
+                                # Check if it looks like a description (has URLs, multiple lines, etc.)
+                                if div_text and len(div_text) > 20 and ('http' in div_text or '▫️' in div_text or '\n' in div_text):
+                                    desc_text = div_text
+                                    logger.info("Found description in div with substantial content")
+                                    print(f"[DESC] Found description: {desc_text[:100]}...")
+                                    break
+                        except:
+                            pass
+                    
+                    # Close modal
+                    try:
+                        # Try multiple close button selectors
+                        close_selectors = [
+                            'button[aria-label="Close"]',
+                            'button:has-text("×")',
+                            'button[class*="close"]',
+                            '[aria-label*="close" i]',
+                            'button:has([class*="close"])',
+                        ]
+                        for close_selector in close_selectors:
+                            try:
+                                close_btn = await self.page.query_selector(close_selector)
                                 if close_btn:
                                     await close_btn.click()
-                                return desc_text
+                                    await asyncio.sleep(0.5)
+                                    logger.debug("Closed modal")
+                                    break
+                            except:
+                                continue
+                        
+                        # Fallback: Press Escape key
+                        await self.page.keyboard.press('Escape')
+                        await asyncio.sleep(0.5)
+                    except:
+                        pass
+                    
+                    return desc_text
+                else:
+                    logger.debug("No modal found after clicking username")
+                    print(f"[DESC] No modal found after clicking username")
                 
-                # Close modal if still open
-                close_btn = await self.page.query_selector('button[aria-label="Close"], button:has-text("×")')
-                if close_btn:
-                    await close_btn.click()
         except Exception as e:
-            print(f"Error parsing user description: {e}")
+            logger.warning(f"Error parsing user description: {e}")
+            print(f"[DESC] Error parsing user description: {e}")
+            import traceback
+            traceback.print_exc()
         
         return ''
     
-    def parse_all_entries(self, target_date: date) -> List[ParsedEntry]:
-        """Parse all entries for a given date (sync wrapper - deprecated, use async version)."""
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If in thread, this won't work - use async version
-                raise RuntimeError("Cannot use sync parse_all_entries in thread. Use parse_all_entries_async instead.")
-            else:
-                return loop.run_until_complete(self.parse_all_entries_async(target_date))
-        except:
-            raise RuntimeError("Cannot use sync parse_all_entries in thread. Use parse_all_entries_async instead.")
-    
-    def _go_to_page(self, page_num: int):
-        """Navigate to a specific page."""
-        try:
-            # Find pagination and click page number
-            page_button = self.page.wait_for_selector(
-                f'button:has-text("{page_num}"), a:has-text("{page_num}"), [data-page="{page_num}"]',
-                timeout=5000
-            )
-            if page_button:
-                page_button.click()
-                self.page.wait_for_load_state('networkidle')
-                time.sleep(2)
-        except:
-            # Try clicking next button multiple times
-            for _ in range(page_num - 1):
-                next_button = self.page.query_selector('button:has-text(">"), a:has-text(">"), [aria-label*="next"]')
-                if next_button:
-                    next_button.click()
-                    time.sleep(2)
-                else:
-                    break
-    
-    def _has_next_page(self) -> bool:
-        """Check if there's a next page."""
-        try:
-            next_button = self.page.query_selector(
-                'button:has-text(">"), a:has-text(">"), [aria-label*="next"]'
-            )
-            if next_button:
-                # Check if button is disabled
-                disabled = next_button.get_attribute('disabled') or 'disabled' in next_button.get_attribute('class') or ''
-                return not bool(disabled)
-            return False
-        except:
-            return False
-    
-    def _parse_page_entries(self, target_date: date) -> List[ParsedEntry]:
-        """Parse all entries on the current page."""
-        entries = []
-        
-        # Find all entry containers
-        # Adjust selector based on actual page structure
-        entry_selectors = [
-            '[class*="mention"]',
-            '[class*="post"]',
-            '[class*="entry"]',
-            'article',
-            '[data-testid*="mention"]',
-        ]
-        
-        entry_elements = []
-        for selector in entry_selectors:
-            entry_elements = self.page.query_selector_all(selector)
-            if entry_elements:
-                break
-        
-        for entry_elem in entry_elements:
-            try:
-                entry = self._parse_single_entry(entry_elem, target_date)
-                if entry:
-                    entries.append(entry)
-            except Exception as e:
-                print(f"Error parsing entry: {e}")
-                continue
-        
-        return entries
-    
-    def _parse_single_entry(self, entry_elem, target_date: date) -> Optional[ParsedEntry]:
-        """Parse a single entry element."""
-        entry = ParsedEntry()
-        entry.date = target_date
-        
-        try:
-            # 1. Parse user name (Назва)
-            # Look for text like "Невідомий користувач" or actual username
-            name_selectors = [
-                ':text("Невідомий користувач")',
-                ':text("користувач")',
-                '[class*="user"]',
-                '[class*="author"]',
-            ]
-            
-            name_text = ''
-            for selector in name_selectors:
-                try:
-                    name_elem = entry_elem.query_selector(selector)
-                    if name_elem:
-                        name_text = name_elem.inner_text().strip()
-                        break
-                except:
-                    continue
-            
-            # Extract name from text like "Невідомий користувач відповів(ла) на коментар в ҐРУНТ"
-            if 'Невідомий користувач' in name_text:
-                entry.name = 'Невідомий користувач'
-            else:
-                # Try to extract actual username
-                match = re.search(r'(\w+)\s+(залишив|відповів|поділив)', name_text)
-                if match:
-                    entry.name = match.group(1)
-                else:
-                    entry.name = name_text.split()[0] if name_text else ''
-            
-            # 2. Parse social network link and name
-            # Look for instagram.com, facebook.com, etc.
-            link_elem = entry_elem.query_selector('a[href*="instagram"], a[href*="facebook"], a[href*="twitter"], a[href*="linkedin"], a[href*="youtube"], a[href*="t.me"], a[href*="tiktok"], a[href*="threads"], a[href*="soundcloud"]')
-            
-            if link_elem:
-                link_href = link_elem.get_attribute('href') or ''
-                entry.link = link_href
-                entry.social_network = detect_social_network_from_link(link_href)
-                entry.table_name = detect_table_from_link(link_href)
-            else:
-                # Try to find link in text
-                link_text = entry_elem.inner_text()
-                link_match = re.search(r'(instagram\.com|facebook\.com|twitter\.com|x\.com|linkedin\.com|youtube\.com|t\.me|tiktok\.com|threads\.net|soundcloud\.com)', link_text, re.IGNORECASE)
-                if link_match:
-                    domain = link_match.group(1).lower()
-                    entry.link = f"https://{domain}"
-                    entry.social_network = detect_social_network_from_link(entry.link)
-                    entry.table_name = detect_table_from_link(entry.link)
-            
-            # 3. Get link via share button (if not found above)
-            if not entry.link:
-                entry.link = self._get_link_via_share_button(entry_elem)
-                if entry.link:
-                    entry.social_network = detect_social_network_from_link(entry.link)
-                    entry.table_name = detect_table_from_link(entry.link)
-            
-            # 4. Parse tags (Тема) - get first one
-            tags = self._parse_tags(entry_elem)
-            entry.tag = tags[0] if tags else ''
-            
-            # 5. Parse note (Примітки) - main text content
-            entry.note = self._parse_note(entry_elem)
-            
-            # 6. Parse user description (Хто це) - click @username
-            entry.description = self._parse_user_description(entry_elem)
-            
-            return entry
-            
-        except Exception as e:
-            print(f"Error parsing entry: {e}")
-            return None
-    
-    def _get_link_via_share_button(self, entry_elem) -> str:
-        """Click share button and get link."""
-        try:
-            # Find share button (icon with share symbol)
-            share_selectors = [
-                'button[aria-label*="share"]',
-                'button[aria-label*="поділитися"]',
-                '[class*="share"]',
-                'button:has([class*="share"])',
-                'svg:has-text("share")',
-            ]
-            
-            share_button = None
-            for selector in share_selectors:
-                try:
-                    share_button = entry_elem.query_selector(selector)
-                    if share_button:
-                        break
-                except:
-                    continue
-            
-            if not share_button:
-                return ''
-            
-            # Click share button
-            share_button.click()
-            time.sleep(1)
-            
-            # Look for "Скопіювати посилання" button
-            copy_link_selectors = [
-                'button:has-text("Скопіювати посилання")',
-                'button:has-text("Copy link")',
-                '[class*="copy"]:has-text("посилання")',
-                '[class*="copy"]:has-text("link")',
-            ]
-            
-            copy_button = None
-            for selector in copy_link_selectors:
-                try:
-                    copy_button = self.page.wait_for_selector(selector, timeout=2000)
-                    if copy_button:
-                        break
-                except:
-                    continue
-            
-            if copy_button:
-                copy_button.click()
-                time.sleep(0.5)
-                # Link should be in clipboard, but we can try to get it from the dialog
-                # For now, we'll need to handle clipboard or get from dialog
-                # This is a simplified version - may need adjustment
-            
-            # Close share dialog if open
-            close_button = self.page.query_selector('button[aria-label="Close"], button:has-text("×"), [class*="close"]')
-            if close_button:
-                close_button.click()
-                time.sleep(0.5)
-            
-            return ''  # Will need clipboard access or dialog text extraction
-            
-        except Exception as e:
-            print(f"Error getting link via share button: {e}")
-            return ''
-    
-    def _parse_tags(self, entry_elem) -> List[str]:
-        """Parse tags from entry - return first one that matches dropdown options."""
-        tags = []
-        
-        # Known tags from Google Sheets dropdown (from screenshots)
-        known_tags = [
-            'Активні парки',
-            'Альбом бб рішень',
-            'ББ маршрути',
-            'ББ укриття',
-            'Безбар\'єрність',
-            'Вакансії',
-            'Витачів',
-            'КИТ Кураж',
-            'Локо Сіті',
-            'M86',
-            'НУШ',
-            'Облаштування житла',
-            'Профтех',
-            'Профтех Славутич',
-            'Психкімнати',
-            'ПУМБ',
-            'Соцжитло',
-            'Терсад',
-            'Word of Mouth',
-            'Питання',
-            'Ціна',
-        ]
-        
-        # Look for tag elements in the UI
-        tag_selectors = [
-            'button:has-text("Додати тег")',
-            '[class*="tag"]',
-            '[data-tag]',
-            '[class*="Tag"]',
-        ]
-        
-        entry_text = entry_elem.inner_text()
-        
-        # First, try to find tags in the UI (button text, tag elements)
-        for selector in tag_selectors:
-            tag_elements = entry_elem.query_selector_all(selector)
-            for tag_elem in tag_elements:
-                tag_text = tag_elem.inner_text().strip()
-                # Remove "Додати тег" button text
-                if tag_text and tag_text != 'Додати тег':
-                    # Check if it matches known tags
-                    for known_tag in known_tags:
-                        if known_tag.lower() in tag_text.lower() or tag_text.lower() in known_tag.lower():
-                            if known_tag not in tags:
-                                tags.append(known_tag)
-                                break
-        
-        # If no tags found in UI, search in entry text
-        if not tags:
-            for known_tag in known_tags:
-                # Check if tag appears in entry text
-                if known_tag.lower() in entry_text.lower():
-                    tags.append(known_tag)
-                    break  # Only first matching tag
-        
-        return tags
-    
-    def _parse_note(self, entry_elem) -> str:
-        """Parse note (Примітки) - main text content."""
-        # Look for main content area
-        content_selectors = [
-            '[class*="content"]',
-            '[class*="text"]',
-            '[class*="note"]',
-            'p',
-            'div:not([class*="tag"]):not([class*="button"])',
-        ]
-        
-        note_text = ''
-        for selector in content_selectors:
-            try:
-                content_elem = entry_elem.query_selector(selector)
-                if content_elem:
-                    text = content_elem.inner_text().strip()
-                    # Filter out UI elements
-                    if text and len(text) > 20 and 'Додати тег' not in text:
-                        note_text = text
-                        break
-            except:
-                continue
-        
-        # Clean up note text
-        if note_text:
-            # Remove "Перекласти" button text
-            note_text = re.sub(r'Перекласти\s*$', '', note_text).strip()
-            # Remove engagement numbers
-            note_text = re.sub(r'\d+\s*тис\.', '', note_text).strip()
-        
-        return note_text
-    
-    def _parse_user_description(self, entry_elem) -> str:
-        """Parse user description by clicking @username."""
-        try:
-            # Find @username mentions
-            username_pattern = r'@(\w+)'
-            entry_text = entry_elem.inner_text()
-            matches = re.findall(username_pattern, entry_text)
-            
-            if not matches:
-                return ''
-            
-            # Click on first @username
-            username = matches[0]
-            username_elem = entry_elem.query_selector(f'a:has-text("@{username}"), span:has-text("@{username}")')
-            
-            if username_elem:
-                username_elem.click()
-                time.sleep(1)
-                
-                # Look for description in popup/modal
-                description_selectors = [
-                    '[class*="description"]',
-                    '[class*="bio"]',
-                    '[class*="about"]',
-                    'p',
-                ]
-                
-                # Try to find modal/popup
-                modal = self.page.query_selector('[role="dialog"], [class*="modal"], [class*="popup"]')
-                if modal:
-                    for selector in description_selectors:
-                        desc_elem = modal.query_selector(selector)
-                        if desc_elem:
-                            description = desc_elem.inner_text().strip()
-                            # Close modal
-                            close_btn = modal.query_selector('button[aria-label="Close"], button:has-text("×")')
-                            if close_btn:
-                                close_btn.click()
-                                time.sleep(0.5)
-                            return description
-                
-                # Close any open modal
-                close_btn = self.page.query_selector('button[aria-label="Close"], button:has-text("×"), [class*="close"]')
-                if close_btn:
-                    close_btn.click()
-                    time.sleep(0.5)
-            
-            return ''
-            
-        except Exception as e:
-            print(f"Error parsing user description: {e}")
-            return ''
 

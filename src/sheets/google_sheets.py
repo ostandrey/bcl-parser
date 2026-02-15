@@ -8,7 +8,7 @@ from typing import List, Dict, Optional
 import time
 import logging
 from ..database.models import ParsedEntry
-from ..config import COLUMN_MAPPINGS, SOCIAL_NETWORK_OPTIONS
+from ..config import COLUMN_MAPPINGS, SOCIAL_NETWORK_OPTIONS, TAG_OPTIONS, get_column_mapping
 
 
 class GoogleSheetsWriter:
@@ -88,15 +88,66 @@ class GoogleSheetsWriter:
         except Exception as e:
             raise ConnectionError(f"Failed to connect to Google Sheets: {e}")
     
-    def get_sheet(self, sheet_name: str):
-        """Get a specific sheet by name."""
+    def get_sheet(self, sheet_name: str, create_if_missing: bool = True):
+        """
+        Get a specific sheet by name.
+        
+        Args:
+            sheet_name: Name of the sheet
+            create_if_missing: If True, create the sheet if it doesn't exist
+        
+        Returns:
+            Worksheet object
+        """
         if not self.spreadsheet:
             self.connect()
         
         try:
             return self.spreadsheet.worksheet(sheet_name)
         except gspread.exceptions.WorksheetNotFound:
-            raise ValueError(f"Sheet '{sheet_name}' not found in spreadsheet")
+            if create_if_missing:
+                logger = logging.getLogger(__name__)
+                logger.info(f"Sheet '{sheet_name}' not found, creating it...")
+                return self.create_sheet(sheet_name)
+            else:
+                raise ValueError(f"Sheet '{sheet_name}' not found in spreadsheet")
+    
+    def create_sheet(self, sheet_name: str) -> 'gspread.Worksheet':
+        """
+        Create a new sheet with proper headers.
+        
+        Args:
+            sheet_name: Name of the sheet to create
+        
+        Returns:
+            Created Worksheet object
+        """
+        logger = logging.getLogger(__name__)
+        
+        try:
+            # Create the sheet
+            sheet = self.spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=10)
+            logger.info(f"Created sheet '{sheet_name}'")
+            
+            # Get column mapping for this table
+            column_mapping = get_column_mapping(sheet_name)
+            
+            # Create header row
+            headers = []
+            # Sort columns by column letter (A, B, C, ...)
+            sorted_columns = sorted(column_mapping.items(), key=lambda x: x[1])
+            for col_name, col_letter in sorted_columns:
+                headers.append(col_name)
+            
+            # Write headers to first row
+            if headers:
+                sheet.update('A1', [headers])
+                logger.info(f"Added headers to sheet '{sheet_name}': {headers}")
+            
+            return sheet
+        except Exception as e:
+            logger.error(f"Failed to create sheet '{sheet_name}': {e}")
+            raise
     
     def find_last_row(self, sheet, start_row: int = 2) -> int:
         """Find the last non-empty row in a sheet."""
@@ -131,8 +182,8 @@ class GoogleSheetsWriter:
         if progress_callback:
             progress_callback(0, len(entries), f"Preparing to write {len(entries)} entries to Google Sheets...")
         
-        sheet = self.get_sheet(sheet_name)
-        column_mapping = COLUMN_MAPPINGS.get(sheet_name, {})
+        sheet = self.get_sheet(sheet_name, create_if_missing=True)
+        column_mapping = get_column_mapping(sheet_name)
         
         # Determine start row
         if start_row is None:
@@ -313,6 +364,8 @@ class GoogleSheetsWriter:
         # For now, return predefined options
         if column == 'Соцмережа':
             return SOCIAL_NETWORK_OPTIONS
+        elif column == 'Тема':
+            return TAG_OPTIONS
         # Add other dropdowns as needed
         return []
     
