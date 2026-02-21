@@ -2,13 +2,39 @@
 import logging
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QLineEdit, QComboBox, QMessageBox
+    QLabel, QLineEdit, QComboBox, QMessageBox, QGroupBox
 )
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont
 from ..sheets.google_sheets import GoogleSheetsWriter
 from ..config import Config, TABLE_NAME_PATTERNS
 
 logger = logging.getLogger(__name__)
+
+# Material Design 3 color scheme (shared with other dialogs)
+COLORS = {
+    'primary': '#6750A4',  # M3 Primary Purple
+    'primary_container': '#EADDFF',
+    'on_primary': '#FFFFFF',
+    'secondary': '#625B71',
+    'secondary_container': '#E8DEF8',
+    'tertiary': '#7D5260',
+    'surface': '#FFFBFE',  # M3 Surface
+    'surface_variant': '#E7E0EC',
+    'background': '#FEF7FF',  # M3 Background
+    'on_surface': '#1C1B1F',
+    'on_surface_variant': '#49454F',
+    'outline': '#79747E',
+    'outline_variant': '#CAC4D0',
+    'shadow': 'rgba(0, 0, 0, 0.15)',
+    'scrim': 'rgba(0, 0, 0, 0.32)',
+    'error': '#BA1A1A',
+    'error_container': '#F9DEDC',
+    'success': '#1B5E20',
+    'success_container': '#C8E6C9',
+    'warning': '#F57C00',
+    'warning_container': '#FFE0B2',
+}
 
 
 class CreateTableDialog(QDialog):
@@ -21,14 +47,38 @@ class CreateTableDialog(QDialog):
         self.created_table_name = None
         
         self.setWindowTitle("Create New Table")
-        self.setGeometry(200, 200, 400, 200)
+        self.setGeometry(200, 200, 500, 400)
         
+        self._apply_styles()
         self._init_ui()
+    
+    def _apply_styles(self):
+        """Apply dialog-wide styles."""
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {COLORS['background']};
+            }}
+            QWidget {{
+                font-family: 'Segoe UI', 'Arial', sans-serif;
+                font-size: 10pt;
+            }}
+        """)
     
     def _init_ui(self):
         """Initialize the user interface."""
         layout = QVBoxLayout()
+        layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 12)
         self.setLayout(layout)
+        
+        # Header
+        header_label = QLabel("Create New Table")
+        header_font = QFont()
+        header_font.setPointSize(18)
+        header_font.setBold(True)
+        header_label.setFont(header_font)
+        header_label.setStyleSheet(f"color: {COLORS['on_surface']}; margin-bottom: 5px;")
+        layout.addWidget(header_label)
         
         # Instructions
         info_label = QLabel(
@@ -36,20 +86,89 @@ class CreateTableDialog(QDialog):
             "You can choose a template or enter a custom name."
         )
         info_label.setWordWrap(True)
+        info_label.setStyleSheet(f"color: {COLORS['on_surface_variant']}; padding: 12px; background-color: {COLORS['surface']}; border-radius: 8px;")
         layout.addWidget(info_label)
+        
+        # Table configuration group
+        config_group = QGroupBox("Table Configuration")
+        config_group.setStyleSheet(f"""
+            QGroupBox {{
+                font-weight: 600;
+                font-size: 12pt;
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 6px;
+                margin-top: 8px;
+                padding-top: 12px;
+                background-color: {COLORS['surface']};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 8px;
+                padding: 0 4px;
+                color: {COLORS['on_surface']};
+            }}
+        """)
+        config_layout = QVBoxLayout()
+        config_layout.setSpacing(6)
+        config_layout.setContentsMargins(10, 8, 10, 10)
         
         # Table type selection
         type_layout = QHBoxLayout()
-        type_layout.addWidget(QLabel("Table Type:"))
+        type_layout.setSpacing(10)
+        type_label = QLabel("Table Type:")
+        type_label.setStyleSheet(f"color: {COLORS['on_surface_variant']}; font-weight: 500; font-size: 11pt; min-width: 100px;")
+        type_layout.addWidget(type_label)
+        # Material Design 3 Filled Dropdown
         self.type_combo = QComboBox()
         self.type_combo.addItems(["Social Network", "Media", "Custom"])
         self.type_combo.currentTextChanged.connect(self._on_type_changed)
+        self.type_combo.setStyleSheet(f"""
+            QComboBox {{
+                padding: 6px 8px;
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 4px;
+                background-color: {COLORS['surface']};
+                font-size: 11pt;
+                color: {COLORS['on_surface']};
+                min-height: 24px;
+            }}
+            QComboBox:hover {{
+                background-color: {COLORS['surface_variant']};
+                border-bottom-color: {COLORS['on_surface']};
+            }}
+            QComboBox:focus {{
+                background-color: {COLORS['surface_variant']};
+                border: 2px solid {COLORS['primary']};
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 32px;
+                background-color: transparent;
+            }}
+            QComboBox::drop-down:hover {{
+                background-color: {COLORS['primary_container']};
+                border-radius: 12px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {COLORS['surface']};
+                border: 1px solid {COLORS['outline']};
+                border-radius: 6px;
+                selection-background-color: {COLORS['primary_container']};
+                selection-color: {COLORS['on_surface']};
+                padding: 4px;
+            }}
+        """)
         type_layout.addWidget(self.type_combo)
-        layout.addLayout(type_layout)
+        type_layout.addStretch()
+        config_layout.addLayout(type_layout)
         
         # Year selection
         year_layout = QHBoxLayout()
-        year_layout.addWidget(QLabel("Year:"))
+        year_layout.setSpacing(10)
+        year_label = QLabel("Year:")
+        year_label.setStyleSheet(f"color: {COLORS['on_surface_variant']}; font-weight: 500; font-size: 11pt; min-width: 100px;")
+        year_layout.addWidget(year_label)
+        # Material Design 3 Filled Dropdown
         self.year_combo = QComboBox()
         from datetime import date
         current_year = date.today().year
@@ -58,34 +177,134 @@ class CreateTableDialog(QDialog):
             self.year_combo.addItem(str(year))
         self.year_combo.setCurrentText(str(current_year))
         self.year_combo.currentTextChanged.connect(self._on_year_changed)
+        self.year_combo.setStyleSheet(f"""
+            QComboBox {{
+                padding: 6px 8px;
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 4px;
+                background-color: {COLORS['surface']};
+                font-size: 11pt;
+                color: {COLORS['on_surface']};
+                min-height: 24px;
+            }}
+            QComboBox:hover {{
+                background-color: {COLORS['surface_variant']};
+                border-bottom-color: {COLORS['on_surface']};
+            }}
+            QComboBox:focus {{
+                background-color: {COLORS['surface_variant']};
+                border: 2px solid {COLORS['primary']};
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 32px;
+                background-color: transparent;
+            }}
+            QComboBox::drop-down:hover {{
+                background-color: {COLORS['primary_container']};
+                border-radius: 12px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {COLORS['surface']};
+                border: 1px solid {COLORS['outline']};
+                border-radius: 6px;
+                selection-background-color: {COLORS['primary_container']};
+                selection-color: {COLORS['on_surface']};
+                padding: 4px;
+            }}
+        """)
         year_layout.addWidget(self.year_combo)
-        layout.addLayout(year_layout)
+        year_layout.addStretch()
+        config_layout.addLayout(year_layout)
         
         # Custom name input
         name_layout = QHBoxLayout()
-        name_layout.addWidget(QLabel("Table Name:"))
+        name_layout.setSpacing(10)
+        name_label = QLabel("Table Name:")
+        name_label.setStyleSheet(f"color: {COLORS['on_surface_variant']}; font-weight: 500; font-size: 11pt; min-width: 100px;")
+        name_layout.addWidget(name_label)
+        # Material Design 3 Filled Text Field
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("Enter table name or use template")
         self.name_input.textChanged.connect(self._on_name_changed)
+        self.name_input.setStyleSheet(f"""
+            QLineEdit {{
+                padding: 6px 8px;
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 4px;
+                background-color: {COLORS['surface']};
+                font-size: 11pt;
+                color: {COLORS['on_surface']};
+            }}
+            QLineEdit:hover {{
+                background-color: {COLORS['surface_variant']};
+                border-bottom-color: {COLORS['on_surface']};
+            }}
+            QLineEdit:focus {{
+                background-color: {COLORS['surface_variant']};
+                border: 2px solid {COLORS['primary']};
+            }}
+        """)
         name_layout.addWidget(self.name_input)
-        layout.addLayout(name_layout)
+        config_layout.addLayout(name_layout)
+        
+        config_group.setLayout(config_layout)
+        layout.addWidget(config_group)
         
         # Preview label
         self.preview_label = QLabel()
-        self.preview_label.setStyleSheet("color: gray; font-style: italic;")
+        self.preview_label.setStyleSheet(f"""
+            color: {COLORS['on_surface']};
+            font-style: italic;
+            padding: 10px;
+            background-color: {COLORS['background']};
+            border-radius: 6px;
+            border: 1px solid {COLORS['outline_variant']};
+        """)
         layout.addWidget(self.preview_label)
         
         # Buttons
         button_layout = QHBoxLayout()
-        
-        self.create_button = QPushButton("Create Table")
-        self.create_button.setDefault(True)
-        self.create_button.clicked.connect(self._on_create)
-        button_layout.addWidget(self.create_button)
+        button_layout.setSpacing(10)
         
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.reject)
+        cancel_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['surface']};
+                color: {COLORS['on_surface']};
+                border: none;
+                box-shadow: 0px 2px 8px {COLORS['shadow']};
+                border-radius: 6px;
+                padding: 10px 24px;
+                font-weight: 500;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['background']};
+                border-color: {COLORS['secondary']};
+            }}
+        """)
         button_layout.addWidget(cancel_button)
+        
+        button_layout.addStretch()
+        
+        self.create_button = QPushButton("✨ Create Table")
+        self.create_button.setDefault(True)
+        self.create_button.clicked.connect(self._on_create)
+        self.create_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['primary']};
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 24px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['primary']};
+            }}
+        """)
+        button_layout.addWidget(self.create_button)
         
         layout.addLayout(button_layout)
         

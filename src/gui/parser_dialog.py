@@ -9,9 +9,11 @@ from typing import List, Optional, Dict
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
     QTableWidget, QTableWidgetItem, QLabel, QProgressBar,
-    QMessageBox, QSpinBox, QCheckBox, QTextEdit, QLineEdit, QFileDialog, QWidget
+    QMessageBox, QSpinBox, QCheckBox, QTextEdit, QLineEdit, QFileDialog, QWidget,
+    QFrame, QGroupBox
 )
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal, Qt
+from PyQt6.QtGui import QFont
 
 from ..database.models import ParsedEntry
 from ..parser.youscan_parser import YouScanParser
@@ -28,6 +30,31 @@ DEFAULT_MEDIA_TABLE = 'ЗМІ 2025'
 MAX_ERROR_DISPLAY = 20
 NOTE_TRUNCATE_LENGTH = 100
 NOTE_DISPLAY_LENGTH = 50
+
+# Material Design 3 color scheme (shared with main_window)
+COLORS = {
+    'primary': '#6750A4',  # M3 Primary Purple
+    'primary_container': '#EADDFF',
+    'on_primary': '#FFFFFF',
+    'secondary': '#625B71',
+    'secondary_container': '#E8DEF8',
+    'tertiary': '#7D5260',
+    'surface': '#FFFBFE',  # M3 Surface
+    'surface_variant': '#E7E0EC',
+    'background': '#FEF7FF',  # M3 Background
+    'on_surface': '#1C1B1F',
+    'on_surface_variant': '#49454F',
+    'outline': '#79747E',
+    'outline_variant': '#CAC4D0',
+    'shadow': 'rgba(0, 0, 0, 0.15)',
+    'scrim': 'rgba(0, 0, 0, 0.32)',
+    'error': '#BA1A1A',
+    'error_container': '#F9DEDC',
+    'success': '#1B5E20',
+    'success_container': '#C8E6C9',
+    'warning': '#F57C00',
+    'warning_container': '#FFE0B2',
+}
 
 
 def _group_entries_by_table(entries: List[ParsedEntry]) -> Dict[str, List[ParsedEntry]]:
@@ -200,28 +227,104 @@ class ParserDialog(QDialog):
         self.table_checkboxes: Dict[str, QCheckBox] = {}  # {table_name: checkbox}
         
         self.setWindowTitle("Parsing Data")
-        self.setMinimumSize(800, 600)
+        self.setMinimumSize(900, 700)
+        self._apply_styles()
         self._init_ui()
+    
+    def _apply_styles(self):
+        """Apply dialog-wide styles."""
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {COLORS['background']};
+            }}
+            QWidget {{
+                font-family: 'Segoe UI', 'Arial', sans-serif;
+                font-size: 10pt;
+            }}
+        """)
     
     def _init_ui(self):
         """Initialize UI."""
         layout = QVBoxLayout()
+        layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 12)
         self.setLayout(layout)
         
-        # Progress section
+        # Progress section - Compact
+        progress_group = QGroupBox("Progress")
+        progress_group.setStyleSheet(f"""
+            QGroupBox {{
+                font-weight: 600;
+                font-size: 12pt;
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 6px;
+                margin-top: 8px;
+                padding-top: 12px;
+                background-color: {COLORS['surface']};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 8px;
+                padding: 0 4px;
+                color: {COLORS['on_surface']};
+            }}
+        """)
         progress_layout = QVBoxLayout()
+        progress_layout.setSpacing(6)
+        progress_layout.setContentsMargins(10, 8, 10, 10)
+        
         self.status_label = QLabel("Preparing to parse...")
+        self.status_label.setStyleSheet(f"color: {COLORS['on_surface_variant']}; font-size: 10pt; font-weight: 400;")
         progress_layout.addWidget(self.status_label)
         
+        # Progress bar with visible percentage
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 4px;
+                text-align: center;
+                height: 24px;
+                background-color: {COLORS['surface_variant']};
+                color: {COLORS['on_surface']};
+                font-size: 10pt;
+                font-weight: 500;
+            }}
+            QProgressBar::chunk {{
+                background-color: {COLORS['primary']};
+                border-radius: 3px;
+            }}
+        """)
         progress_layout.addWidget(self.progress_bar)
         
-        layout.addLayout(progress_layout)
+        progress_group.setLayout(progress_layout)
+        layout.addWidget(progress_group)
         
-        # Parsed entries table
-        table_label = QLabel("Parsed Entries:")
-        layout.addWidget(table_label)
+        # Parsed Entries - Compact and Visible
+        table_group = QGroupBox("Parsed Entries")
+        table_group.setStyleSheet(f"""
+            QGroupBox {{
+                font-weight: 600;
+                font-size: 12pt;
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 6px;
+                margin-top: 8px;
+                padding-top: 12px;
+                background-color: {COLORS['surface']};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 8px;
+                padding: 0 4px;
+                color: {COLORS['on_surface']};
+            }}
+        """)
+        table_layout = QVBoxLayout()
+        table_layout.setContentsMargins(8, 8, 8, 8)
+        table_layout.setSpacing(4)
         
         self.entries_table = QTableWidget()
         self.entries_table.setColumnCount(7)
@@ -229,79 +332,358 @@ class ParserDialog(QDialog):
             'Table', 'Name', 'Social Network', 'Tag', 'Link', 'Note', 'Description'
         ])
         self.entries_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        # Make table column wider
-        self.entries_table.setColumnWidth(0, 150)
-        layout.addWidget(self.entries_table)
+        self.entries_table.setColumnWidth(0, 100)
+        self.entries_table.setColumnWidth(1, 120)
+        self.entries_table.setColumnWidth(2, 100)
+        self.entries_table.setColumnWidth(3, 100)
+        self.entries_table.setColumnWidth(4, 150)
+        self.entries_table.setColumnWidth(5, 150)
+        self.entries_table.setColumnWidth(6, 200)
+        self.entries_table.setAlternatingRowColors(True)
+        self.entries_table.verticalHeader().setVisible(False)
+        self.entries_table.setShowGrid(True)
+        self.entries_table.setStyleSheet(f"""
+            QTableWidget {{
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 4px;
+                background-color: {COLORS['surface']};
+                gridline-color: {COLORS['outline_variant']};
+                font-size: 9pt;
+            }}
+            QTableWidget::item {{
+                padding: 4px 6px;
+                border: none;
+                color: {COLORS['on_surface']};
+            }}
+            QTableWidget::item:alternate {{
+                background-color: {COLORS['surface_variant']};
+            }}
+            QTableWidget::item:selected {{
+                background-color: {COLORS['primary_container']};
+                color: {COLORS['on_surface']};
+            }}
+            QTableWidget::item:hover {{
+                background-color: {COLORS['primary_container']};
+            }}
+            QHeaderView::section {{
+                background-color: {COLORS['primary_container']};
+                padding: 6px 8px;
+                border: none;
+                border-bottom: 1px solid {COLORS['primary']};
+                border-right: 1px solid {COLORS['outline_variant']};
+                font-weight: 600;
+                font-size: 10pt;
+                color: {COLORS['on_surface']};
+            }}
+            QScrollBar:vertical {{
+                border: none;
+                background-color: {COLORS['surface_variant']};
+                width: 12px;
+                border-radius: 6px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {COLORS['outline']};
+                border-radius: 6px;
+                min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {COLORS['primary']};
+            }}
+        """)
+        table_layout.addWidget(self.entries_table)
+        table_group.setLayout(table_layout)
+        layout.addWidget(table_group)
         
-        # Table selection section (shown after parsing)
-        self.table_summary_label = QLabel("Tables to write:")
-        self.table_summary_label.setVisible(False)
-        layout.addWidget(self.table_summary_label)
-        
-        self.table_checkboxes_widget = QWidget()
+        # Table selection section - Compact
+        self.table_selection_group = QGroupBox("Tables to Write")
+        self.table_selection_group.setStyleSheet(f"""
+            QGroupBox {{
+                font-weight: 600;
+                font-size: 12pt;
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 6px;
+                margin-top: 8px;
+                padding-top: 12px;
+                background-color: {COLORS['surface']};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 8px;
+                padding: 0 4px;
+                color: {COLORS['on_surface']};
+            }}
+        """)
         self.table_checkboxes_layout = QVBoxLayout()
-        self.table_checkboxes_widget.setLayout(self.table_checkboxes_layout)
-        self.table_checkboxes_widget.setVisible(False)
-        layout.addWidget(self.table_checkboxes_widget)
+        self.table_checkboxes_layout.setContentsMargins(10, 8, 10, 10)
+        self.table_checkboxes_layout.setSpacing(4)
+        self.table_selection_group.setLayout(self.table_checkboxes_layout)
+        self.table_selection_group.setVisible(False)
+        layout.addWidget(self.table_selection_group)
         
         # Store table checkboxes
         self.table_checkboxes = {}  # {table_name: checkbox}
         
-        # Errors section (collapsible)
+        # Errors section - Compact
+        self.errors_group = QGroupBox("Errors")
+        self.errors_group.setStyleSheet(f"""
+            QGroupBox {{
+                font-weight: 600;
+                font-size: 12pt;
+                border: 1px solid {COLORS['error']};
+                border-radius: 6px;
+                margin-top: 8px;
+                padding-top: 12px;
+                background-color: {COLORS['error_container']};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 8px;
+                padding: 0 4px;
+                color: {COLORS['error']};
+            }}
+        """)
+        errors_layout = QVBoxLayout()
+        errors_layout.setContentsMargins(10, 8, 10, 10)
+        errors_layout.setSpacing(4)
+        
         self.errors_checkbox = QCheckBox("Show Errors")
         self.errors_checkbox.setChecked(False)
+        self.errors_checkbox.setStyleSheet(f"""
+            QCheckBox {{
+                color: {COLORS['on_surface']};
+                font-weight: 400;
+                font-size: 10pt;
+                spacing: 6px;
+            }}
+            QCheckBox::indicator {{
+                width: 16px;
+                height: 16px;
+                border: 2px solid {COLORS['outline']};
+                border-radius: 3px;
+                background-color: {COLORS['surface']};
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {COLORS['primary']};
+                border-color: {COLORS['primary']};
+                image: none;
+            }}
+            QCheckBox::indicator:checked::after {{
+                content: "✓";
+                color: {COLORS['on_primary']};
+            }}
+        """)
         self.errors_checkbox.toggled.connect(self._toggle_errors)
-        layout.addWidget(self.errors_checkbox)
+        errors_layout.addWidget(self.errors_checkbox)
         
         self.errors_text = QTextEdit()
-        self.errors_text.setMaximumHeight(150)
+        self.errors_text.setMaximumHeight(80)
         self.errors_text.setVisible(False)
-        layout.addWidget(self.errors_text)
+        self.errors_text.setStyleSheet(f"""
+            QTextEdit {{
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 4px;
+                background-color: {COLORS['surface']};
+                padding: 6px;
+                font-size: 9pt;
+            }}
+        """)
+        errors_layout.addWidget(self.errors_text)
+        self.errors_group.setLayout(errors_layout)
+        layout.addWidget(self.errors_group)
         
-        # Options
-        options_layout = QHBoxLayout()
-        options_layout.addWidget(QLabel("Insert at row:"))
+        # Options section - Compact
+        options_group = QGroupBox("Options")
+        options_group.setStyleSheet(f"""
+            QGroupBox {{
+                font-weight: 600;
+                font-size: 12pt;
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 6px;
+                margin-top: 8px;
+                padding-top: 12px;
+                background-color: {COLORS['surface']};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 8px;
+                padding: 0 4px;
+                color: {COLORS['on_surface']};
+            }}
+        """)
+        options_layout = QVBoxLayout()
+        options_layout.setSpacing(6)
+        options_layout.setContentsMargins(10, 8, 10, 10)
         
+        row_layout = QHBoxLayout()
+        row_layout.setSpacing(10)
+        row_label = QLabel("Insert at row:")
+        row_label.setStyleSheet(f"color: {COLORS['on_surface_variant']}; font-weight: 500; font-size: 11pt;")
+        row_layout.addWidget(row_label)
+        
+        # Compact SpinBox
         self.row_spinbox = QSpinBox()
         self.row_spinbox.setMinimum(2)
         self.row_spinbox.setMaximum(100000)
         self.row_spinbox.setValue(0)  # 0 means auto (end of list)
         self.row_spinbox.setSpecialValueText("Auto (end of list)")
-        options_layout.addWidget(self.row_spinbox)
-        
-        options_layout.addStretch()
-        layout.addLayout(options_layout)
+        self.row_spinbox.setStyleSheet(f"""
+            QSpinBox {{
+                padding: 6px 8px;
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 4px;
+                background-color: {COLORS['surface']};
+                min-width: 150px;
+                font-size: 10pt;
+                color: {COLORS['on_surface']};
+            }}
+            QSpinBox:hover {{
+                border-color: {COLORS['primary']};
+            }}
+            QSpinBox:focus {{
+                border: 2px solid {COLORS['primary']};
+            }}
+            QSpinBox::up-button, QSpinBox::down-button {{
+                border: none;
+                background-color: transparent;
+                width: 24px;
+            }}
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
+                background-color: {COLORS['primary_container']};
+                border-radius: 12px;
+            }}
+        """)
+        row_layout.addWidget(self.row_spinbox)
+        row_layout.addStretch()
+        options_layout.addLayout(row_layout)
 
         # Offline export (Excel) options
-        export_layout = QHBoxLayout()
-        export_layout.addWidget(QLabel("Export path:"))
+        export_label = QLabel("Export path:")
+        export_label.setStyleSheet(f"color: {COLORS['on_surface_variant']}; font-weight: 500; font-size: 11pt;")
+        options_layout.addWidget(export_label)
+        
+        export_path_layout = QHBoxLayout()
+        export_path_layout.setSpacing(10)
 
+        # Compact LineEdit
         self.export_path_input = QLineEdit()
         self.export_path_input.setPlaceholderText("Select a folder or file path for the Excel report...")
         self.export_path_input.setText(self.config.export_dir)
-        export_layout.addWidget(self.export_path_input)
+        self.export_path_input.setStyleSheet(f"""
+            QLineEdit {{
+                padding: 6px 8px;
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 4px;
+                background-color: {COLORS['surface']};
+                font-size: 10pt;
+                color: {COLORS['on_surface']};
+            }}
+            QLineEdit:hover {{
+                border-color: {COLORS['primary']};
+            }}
+            QLineEdit:focus {{
+                border: 2px solid {COLORS['primary']};
+            }}
+        """)
+        export_path_layout.addWidget(self.export_path_input)
 
+        # Material Design 3 Outlined Button
         self.browse_export_button = QPushButton("Browse…")
         self.browse_export_button.clicked.connect(self._on_browse_export_path)
-        export_layout.addWidget(self.browse_export_button)
-
-        layout.addLayout(export_layout)
+        self.browse_export_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {COLORS['primary']};
+                border: 1px solid {COLORS['outline']};
+                border-radius: 20px;
+                padding: 10px 24px;
+                font-weight: 500;
+                font-size: 11pt;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['primary_container']};
+                border-color: {COLORS['primary']};
+            }}
+        """)
+        export_path_layout.addWidget(self.browse_export_button)
+        options_layout.addLayout(export_path_layout)
+        
+        options_group.setLayout(options_layout)
+        layout.addWidget(options_group)
         
         # Buttons
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
         
+        # Material Design 3 Outlined Button
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.clicked.connect(self._on_cancel)
+        self.cancel_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {COLORS['primary']};
+                border: 1px solid {COLORS['outline']};
+                border-radius: 20px;
+                padding: 10px 24px;
+                font-weight: 500;
+                font-size: 11pt;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['primary_container']};
+                border-color: {COLORS['primary']};
+            }}
+        """)
         button_layout.addWidget(self.cancel_button)
         
-        self.export_button = QPushButton("Generate Excel report")
+        # Material Design 3 Filled Button
+        self.export_button = QPushButton("📊 Generate Excel Report")
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self._on_export_excel)
+        self.export_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['success_container']};
+                color: {COLORS['success']};
+                border: none;
+                border-radius: 20px;
+                padding: 12px 32px;
+                font-weight: 500;
+                font-size: 12pt;
+                letter-spacing: 0.1px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['success_container']};
+                box-shadow: 0px 4px 8px {COLORS['shadow']};
+            }}
+            QPushButton:disabled {{
+                background-color: {COLORS['outline_variant']};
+                color: {COLORS['on_surface_variant']};
+            }}
+        """)
         button_layout.addWidget(self.export_button)
 
-        self.submit_button = QPushButton("Submit to Google Sheets")
+        # Material Design 3 Filled Button
+        self.submit_button = QPushButton("📤 Submit to Google Sheets")
         self.submit_button.setEnabled(False)
         self.submit_button.clicked.connect(self._on_submit)
+        self.submit_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['primary']};
+                color: {COLORS['on_primary']};
+                border: none;
+                border-radius: 20px;
+                padding: 12px 32px;
+                font-weight: 500;
+                font-size: 12pt;
+                letter-spacing: 0.1px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['primary']};
+                box-shadow: 0px 4px 8px {COLORS['shadow']};
+            }}
+            QPushButton:disabled {{
+                background-color: {COLORS['outline_variant']};
+                color: {COLORS['on_surface_variant']};
+            }}
+        """)
         button_layout.addWidget(self.submit_button)
         
         layout.addLayout(button_layout)
@@ -431,25 +813,44 @@ class ParserDialog(QDialog):
     def _update_table_selection(self, entries_by_table: Dict[str, List[ParsedEntry]]):
         """Update table selection UI with checkboxes for each table."""
         # Clear existing checkboxes
-        for checkbox in self.table_checkboxes.values():
-            self.table_checkboxes_layout.removeWidget(checkbox)
-            checkbox.deleteLater()
+        while self.table_checkboxes_layout.count():
+            child = self.table_checkboxes_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
         self.table_checkboxes.clear()
         
         # Create checkboxes for each table
         for table_name, table_entries in entries_by_table.items():
             checkbox = QCheckBox(f"{table_name} ({len(table_entries)} entries)")
             checkbox.setChecked(True)  # Checked by default
+            checkbox.setStyleSheet(f"""
+                QCheckBox {{
+                    color: {COLORS['on_surface']};
+                    font-weight: 400;
+                    font-size: 10pt;
+                    spacing: 6px;
+                    padding: 2px;
+                }}
+                QCheckBox::indicator {{
+                    width: 16px;
+                    height: 16px;
+                    border: 2px solid {COLORS['outline']};
+                    border-radius: 3px;
+                    background-color: {COLORS['surface']};
+                }}
+                QCheckBox::indicator:checked {{
+                    background-color: {COLORS['primary']};
+                    border-color: {COLORS['primary']};
+                }}
+            """)
             self.table_checkboxes_layout.addWidget(checkbox)
             self.table_checkboxes[table_name] = checkbox
         
         # Show the table selection UI if there are tables
         if entries_by_table:
-            self.table_summary_label.setVisible(True)
-            self.table_checkboxes_widget.setVisible(True)
+            self.table_selection_group.setVisible(True)
         else:
-            self.table_summary_label.setVisible(False)
-            self.table_checkboxes_widget.setVisible(False)
+            self.table_selection_group.setVisible(False)
 
     def _on_browse_export_path(self):
         """Select export directory (or file path)."""
