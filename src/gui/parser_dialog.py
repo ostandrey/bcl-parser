@@ -1,14 +1,18 @@
 """Parsing dialog with preview and error handling."""
+import asyncio
 import logging
+from collections import defaultdict
+from datetime import date, timedelta
+from pathlib import Path
+from typing import List, Optional, Dict
+
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
     QTableWidget, QTableWidgetItem, QLabel, QProgressBar,
     QMessageBox, QSpinBox, QCheckBox, QTextEdit, QLineEdit, QFileDialog, QWidget
 )
-from PyQt6.QtCore import Qt, QThread
-from PyQt6.QtCore import pyqtSignal
-from typing import List, Optional, Dict
-from datetime import date
+from PyQt6.QtCore import QThread, pyqtSignal
+
 from ..database.models import ParsedEntry
 from ..parser.youscan_parser import YouScanParser
 from ..sheets.google_sheets import GoogleSheetsWriter
@@ -18,6 +22,44 @@ from ..utils.date_tracker import DateTracker
 from ..export.excel_exporter import export_entries_to_xlsx
 
 logger = logging.getLogger(__name__)
+
+# Constants
+DEFAULT_MEDIA_TABLE = 'ЗМІ 2025'
+MAX_ERROR_DISPLAY = 20
+NOTE_TRUNCATE_LENGTH = 100
+NOTE_DISPLAY_LENGTH = 50
+
+
+def _group_entries_by_table(entries: List[ParsedEntry]) -> Dict[str, List[ParsedEntry]]:
+    """Group entries by their table name."""
+    entries_by_table = defaultdict(list)
+    for entry in entries:
+        table_name = entry.table_name or DEFAULT_MEDIA_TABLE
+        entries_by_table[table_name].append(entry)
+    return entries_by_table
+
+
+class ExcelExportThread(QThread):
+    """Thread for exporting entries to Excel file."""
+    progress = pyqtSignal(int, int, str)
+    finished = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, entries: List[ParsedEntry], output_path: str):
+        super().__init__()
+        self._entries = entries
+        self._output_path = output_path
+
+    def run(self):
+        """Run Excel export in thread."""
+        try:
+            def cb(current, total, message):
+                self.progress.emit(current, total, message)
+
+            out = export_entries_to_xlsx(self._entries, self._output_path, progress_callback=cb)
+            self.finished.emit(str(out))
+        except Exception as e:
+            self.failed.emit(str(e))
 
 
 class ParsingThread(QThread):
@@ -43,10 +85,6 @@ class ParsingThread(QThread):
     
     def run(self):
         """Run parsing in thread."""
-        import asyncio
-        import logging
-        logger = logging.getLogger(__name__)
-        
         # Create new event loop for this thread
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -59,41 +97,33 @@ class ParsingThread(QThread):
     
     async def _run_async(self):
         """Async parsing logic."""
-        import logging
-        logger = logging.getLogger(__name__)
-        
         # Start browser in async mode
         try:
             logger.info("Starting browser in async mode...")
-            print("[INFO] Starting browser in async mode...")
             await self.parser.start_async()
             logger.info("Browser started successfully")
-            print("[INFO] Browser started successfully")
         except Exception as e:
             logger.exception("Failed to start browser")
-            print(f"[ERROR] Failed to start browser: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            self.errors.append({'date': None, 'error': f"Failed to start browser: {str(e)}", 'entry': None})
+            self.errors.append({
+                'date': None,
+                'error': f"Failed to start browser: {str(e)}",
+                'entry': None
+            })
             self.finished.emit(self.entries, self.errors)
             return
         
         try:
             total_days = len(self.dates)
             logger.info(f"Starting to parse {total_days} day(s)")
-            print(f"[INFO] Starting to parse {total_days} day(s)")
             
             # Set the full date range once at the beginning
-            # Get date_from (first date) and date_to (last date) from the dates list
             if self.dates:
                 date_from = min(self.dates)
                 date_to = max(self.dates)
                 logger.info(f"Setting date range for full period: {date_from} to {date_to}")
-                print(f"[INFO] Setting date range for full period: {date_from} to {date_to}")
                 await self.parser.set_date_range_async(date_from, date_to)
             else:
                 logger.warning("No dates to parse")
-                print("[WARNING] No dates to parse")
             
             for day_idx, target_date in enumerate(self.dates):
                 if self._stop_requested:
@@ -101,15 +131,12 @@ class ParsingThread(QThread):
                 
                 self.progress.emit(day_idx + 1, total_days, f"Parsing {target_date}")
                 logger.info(f"Parsing date: {target_date}")
-                print(f"[INFO] Parsing date: {target_date}")
                 
                 try:
                     # Parse all entries for this day (date range already set above)
                     logger.info(f"Fetching entries for {target_date}")
-                    print(f"[INFO] Fetching entries for {target_date}")
                     day_entries = await self.parser.parse_all_entries_async(target_date)
                     logger.info(f"Found {len(day_entries)} entries for {target_date}")
-                    print(f"[INFO] Found {len(day_entries)} entries for {target_date}")
                     
                     for entry in day_entries:
                         if self._stop_requested:
@@ -127,24 +154,17 @@ class ParsingThread(QThread):
                     }
                     self.errors.append(error_info)
                     logger.exception(f"Error parsing {target_date}")
-                    print(f"[ERROR] Error parsing {target_date}: {str(e)}")
-                    import traceback
-                    traceback.print_exc()
                     self.error.emit(f"Error parsing {target_date}: {str(e)}", None)
         finally:
             # Close browser
             try:
                 logger.info("Closing browser...")
-                print("[INFO] Closing browser...")
                 await self.parser.close_async()
                 logger.info("Browser closed")
-                print("[INFO] Browser closed")
             except Exception as e:
                 logger.warning(f"Error closing browser: {e}")
-                print(f"[WARNING] Error closing browser: {e}")
         
         logger.info(f"Parsing finished. Total entries: {len(self.entries)}, Errors: {len(self.errors)}")
-        print(f"[INFO] Parsing finished. Total entries: {len(self.entries)}, Errors: {len(self.errors)}")
         self.finished.emit(self.entries, self.errors)
     
     def stop(self):
@@ -297,12 +317,10 @@ class ParserDialog(QDialog):
         password = self.config.site_password
         
         logger.debug(f"Using email: {email}")
-        print(f"[DEBUG] Starting parsing with email: {email}")
         
         if not email or not password:
             error_msg = "Please configure YouScan.io credentials in Settings."
             logger.error(error_msg)
-            print(f"[ERROR] {error_msg}")
             QMessageBox.critical(
                 self,
                 "Missing Credentials",
@@ -314,17 +332,12 @@ class ParserDialog(QDialog):
         # Initialize parser - will be started in thread with async
         try:
             logger.info("Initializing YouScan parser")
-            print("[INFO] Initializing YouScan parser...")
             # Use persistent context to save cookies/session (helps avoid detection)
             self.parser = YouScanParser(email, password, headless=False, use_persistent_context=True)
             logger.info("Parser initialized (will start browser in thread)")
-            print("[INFO] Parser initialized (will start browser in thread)")
         except Exception as e:
             error_msg = f"Failed to initialize parser:\n{str(e)}"
             logger.exception("Initialization error")
-            print(f"[ERROR] {error_msg}")
-            import traceback
-            traceback.print_exc()
             QMessageBox.critical(
                 self,
                 "Initialization Error",
@@ -334,7 +347,6 @@ class ParserDialog(QDialog):
             return
         
         # Get date range
-        from datetime import timedelta
         dates = []
         current = self.date_from
         while current <= self.date_to:
@@ -360,19 +372,12 @@ class ParserDialog(QDialog):
         
         # Log parsed entry
         logger.info(f"Parsed entry: {entry.name} - {entry.social_network}")
-        print(f"[PARSED] Name: {entry.name}")
-        print(f"         Social Network: {entry.social_network}")
-        print(f"         Tag: {entry.tag}")
-        print(f"         Link: {entry.link}")
-        print(f"         Note: {entry.note[:50]}..." if len(entry.note) > 50 else f"         Note: {entry.note}")
-        print(f"         Description: {entry.description}")
-        print("-" * 60)
         
         row = self.entries_table.rowCount()
         self.entries_table.insertRow(row)
         
         # Column 0: Table name
-        table_name = entry.table_name or 'ЗМІ 2025'
+        table_name = entry.table_name or DEFAULT_MEDIA_TABLE
         self.entries_table.setItem(row, 0, QTableWidgetItem(table_name))
         
         # Column 1: Name
@@ -384,7 +389,10 @@ class ParserDialog(QDialog):
         # Column 4: Link
         self.entries_table.setItem(row, 4, QTableWidgetItem(entry.link or ''))
         # Column 5: Note
-        self.entries_table.setItem(row, 5, QTableWidgetItem(entry.note[:100] + '...' if len(entry.note) > 100 else entry.note))
+        note_text = entry.note or ''
+        if len(note_text) > NOTE_TRUNCATE_LENGTH:
+            note_text = note_text[:NOTE_TRUNCATE_LENGTH] + '...'
+        self.entries_table.setItem(row, 5, QTableWidgetItem(note_text))
         # Column 6: Description
         self.entries_table.setItem(row, 6, QTableWidgetItem(entry.description or ''))
         
@@ -400,11 +408,7 @@ class ParserDialog(QDialog):
         self.progress_bar.setValue(100)
         
         # Group entries by table and show table selection
-        from collections import defaultdict
-        entries_by_table = defaultdict(list)
-        for entry in entries:
-            table_name = entry.table_name or 'ЗМІ 2025'
-            entries_by_table[table_name].append(entry)
+        entries_by_table = _group_entries_by_table(entries)
         
         # Update table selection UI
         self._update_table_selection(entries_by_table)
@@ -468,7 +472,6 @@ class ParserDialog(QDialog):
             return
 
         # Build a default filename if user provided a folder
-        from pathlib import Path
         safe_table = (self.table_name or "report").replace("/", "_").replace("\\", "_")
         filename = f"{safe_table}_{self.date_from.isoformat()}_{self.date_to.isoformat()}.xlsx"
         out_path = Path(base)
@@ -476,26 +479,6 @@ class ParserDialog(QDialog):
             out_path = out_path / filename
 
         self.config.export_dir = str(Path(base))
-
-        class ExcelExportThread(QThread):
-            progress = pyqtSignal(int, int, str)
-            finished = pyqtSignal(str)
-            failed = pyqtSignal(str)
-
-            def __init__(self, entries, output_path):
-                super().__init__()
-                self._entries = entries
-                self._output_path = output_path
-
-            def run(self):
-                try:
-                    def cb(current, total, message):
-                        self.progress.emit(current, total, message)
-
-                    out = export_entries_to_xlsx(self._entries, self._output_path, progress_callback=cb)
-                    self.finished.emit(str(out))
-                except Exception as e:
-                    self.failed.emit(str(e))
 
         # Disable buttons while exporting
         self.export_button.setEnabled(False)
@@ -548,7 +531,7 @@ class ParserDialog(QDialog):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
             if reply == QMessageBox.StandardButton.Yes:
-                self.parsing_thread.stop()
+                self.parsing_thread._stop_requested = True
                 self.parsing_thread.wait()
                 if self.parser:
                     self.parser.close()
@@ -605,11 +588,7 @@ class ParserDialog(QDialog):
         
         try:
             # Group entries by their automatically detected table_name
-            from collections import defaultdict
-            entries_by_table = defaultdict(list)
-            for entry in self.entries:
-                table_name = entry.table_name or 'ЗМІ 2025'  # Fallback if not set
-                entries_by_table[table_name].append(entry)
+            entries_by_table = _group_entries_by_table(self.entries)
             
             # Filter by selected tables only
             selected_tables = {
@@ -634,10 +613,8 @@ class ParserDialog(QDialog):
                 # Skip if table not selected
                 if table_name not in selected_tables:
                     logger.info(f"Skipping table '{table_name}' (not selected)")
-                    print(f"[WRITE] Skipping table '{table_name}' (not selected)")
                     continue
                 logger.info(f"Writing {len(table_entries)} entries to table '{table_name}'")
-                print(f"[WRITE] Writing {len(table_entries)} entries to table '{table_name}'")
                 
                 result = sheets_writer.write_entries(
                     table_name, 
@@ -674,10 +651,10 @@ class ParserDialog(QDialog):
                     # Show error details
                     error_details = "\n".join([
                         f"Table {err.get('table', 'unknown')}, Row {err.get('row', 'unknown')}: {err.get('error', 'unknown error')}"
-                        for err in total_failed[:20]  # Limit to first 20 errors
+                        for err in total_failed[:MAX_ERROR_DISPLAY]
                     ])
-                    if len(total_failed) > 20:
-                        error_details += f"\n... and {len(total_failed) - 20} more errors"
+                    if len(total_failed) > MAX_ERROR_DISPLAY:
+                        error_details += f"\n... and {len(total_failed) - MAX_ERROR_DISPLAY} more errors"
                     QMessageBox.warning(self, "Failed Entries", error_details)
             else:
                 table_names = ", ".join(entries_by_table.keys())
@@ -690,6 +667,7 @@ class ParserDialog(QDialog):
             self.accept()
         
         except Exception as e:
+            logger.exception("Error writing to Google Sheets")
             reply = QMessageBox.question(
                 self,
                 "Error Writing to Sheets",

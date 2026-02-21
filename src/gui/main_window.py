@@ -1,11 +1,12 @@
 """Main window for BCL Parser application."""
 import logging
+from datetime import timedelta
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QDateEdit, QMessageBox, QDialog
 )
 from PyQt6.QtCore import QDate
-from datetime import date
+from PyQt6.QtGui import QMouseEvent
 from ..config import Config
 from ..database.db_manager import DatabaseManager
 from ..utils.date_tracker import DateTracker
@@ -61,6 +62,7 @@ class MainWindow(QMainWindow):
         # Missing days notification
         self.missing_days_label = QLabel()
         self.missing_days_label.setStyleSheet("color: orange;")
+        self.missing_days_label.mousePressEvent = self._on_missing_days_clicked
         layout.addWidget(self.missing_days_label)
         
         # Start parsing button
@@ -89,7 +91,6 @@ class MainWindow(QMainWindow):
         today = self.date_tracker.get_today()
         
         # Check last 30 days for missing dates
-        from datetime import timedelta
         start_date = today - timedelta(days=30)
         missing = self.date_tracker.check_missing_days(table_name, start_date, today)
         
@@ -97,10 +98,16 @@ class MainWindow(QMainWindow):
             self.missing_days_label.setText(
                 f"⚠️ {len(missing)} days missed. Click to fill missing days."
             )
-            self.missing_days_label.mousePressEvent = lambda e: self._fill_missing_days()
+            self._has_missing_days = True
         else:
             self.missing_days_label.setText("✅ All days parsed")
-            self.missing_days_label.mousePressEvent = None
+            self._has_missing_days = False
+    
+    def _on_missing_days_clicked(self, event: QMouseEvent):
+        """Handle click on missing days label."""
+        if self._has_missing_days:
+            self._fill_missing_days()
+        event.accept()
     
     def _fill_missing_days(self):
         """Fill missing days with parsing."""
@@ -115,19 +122,25 @@ class MainWindow(QMainWindow):
         """Handle start parsing button click."""
         try:
             logger.info("Start parsing button clicked")
-            print("[INFO] Start parsing button clicked")
             
             table_name = self.config.default_table
             date_from = self.date_from.date().toPyDate()
             date_to = self.date_to.date().toPyDate()
             
+            # Validate date range
+            if date_from > date_to:
+                QMessageBox.warning(
+                    self,
+                    "Invalid Date Range",
+                    "The 'From' date must be before or equal to the 'To' date."
+                )
+                return
+            
             logger.info(f"Table: {table_name}, Date range: {date_from} to {date_to}")
-            print(f"[INFO] Table: {table_name}, Date range: {date_from} to {date_to}")
             
             # Check credentials
             if not self.config.site_username or not self.config.site_password:
                 logger.warning("Missing YouScan.io credentials")
-                print("[WARNING] Missing YouScan.io credentials")
                 QMessageBox.warning(
                     self,
                     "Missing Credentials",
@@ -138,7 +151,6 @@ class MainWindow(QMainWindow):
             
             if not self.config.google_sheets_id:
                 logger.warning("Missing Google Sheets ID")
-                print("[WARNING] Missing Google Sheets ID")
                 QMessageBox.warning(
                     self,
                     "Missing Configuration",
@@ -148,7 +160,6 @@ class MainWindow(QMainWindow):
             
             # Open parsing dialog
             logger.info("Opening parsing dialog")
-            print("[INFO] Opening parsing dialog")
             from .parser_dialog import ParserDialog
             dialog = ParserDialog(
                 self,
@@ -165,9 +176,6 @@ class MainWindow(QMainWindow):
             self._check_missing_days()
         except Exception as e:
             logger.exception("Error in _on_start_parsing")
-            print(f"[ERROR] Error starting parsing: {str(e)}")
-            import traceback
-            traceback.print_exc()
             QMessageBox.critical(
                 self,
                 "Error",
@@ -190,5 +198,4 @@ class MainWindow(QMainWindow):
                 # Update default table to the newly created one
                 self.config.default_table = created_table
                 logger.info(f"Created new table: {created_table}")
-                print(f"[INFO] Created new table: {created_table}")
 
