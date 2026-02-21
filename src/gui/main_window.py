@@ -3,11 +3,13 @@ import logging
 from datetime import timedelta
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QDateEdit, QMessageBox, QDialog,
-    QFrame, QGroupBox
+    QPushButton, QLabel, QMessageBox, QDialog,
+    QFrame, QGroupBox, QLineEdit, QCalendarWidget
 )
 from PyQt6.QtCore import QDate, Qt
 from PyQt6.QtGui import QMouseEvent, QFont
+from datetime import datetime
+from .date_picker import MaterialDateRangeDialog
 from ..config import Config
 from ..database.db_manager import DatabaseManager
 from ..utils.date_tracker import DateTracker
@@ -66,6 +68,64 @@ class MainWindow(QMainWindow):
                 font-family: 'Segoe UI', 'Arial', sans-serif;
                 font-size: 10pt;
             }}
+            /* Calendar Widget Styling */
+            QCalendarWidget {{
+                background-color: {COLORS['surface']};
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 8px;
+                color: {COLORS['on_surface']};
+            }}
+            QCalendarWidget QTableView {{
+                selection-background-color: {COLORS['primary_container']};
+                selection-color: {COLORS['on_surface']};
+                gridline-color: {COLORS['outline_variant']};
+            }}
+            QCalendarWidget QTableView::item {{
+                padding: 4px;
+                border-radius: 4px;
+            }}
+            QCalendarWidget QTableView::item:selected {{
+                background-color: {COLORS['primary']};
+                color: {COLORS['on_primary']};
+            }}
+            QCalendarWidget QTableView::item:hover {{
+                background-color: {COLORS['primary_container']};
+            }}
+            QCalendarWidget QHeaderView::section {{
+                background-color: {COLORS['primary']};
+                color: {COLORS['on_primary']};
+                padding: 8px;
+                font-weight: 600;
+                border: none;
+                border-bottom: 1px solid {COLORS['primary']};
+            }}
+            QCalendarWidget QSpinBox {{
+                background-color: {COLORS['surface']};
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 4px;
+                padding: 4px;
+                color: {COLORS['on_surface']};
+            }}
+            QCalendarWidget QToolButton {{
+                background-color: {COLORS['primary']};
+                color: {COLORS['on_primary']};
+                border: none;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-weight: 600;
+            }}
+            QCalendarWidget QToolButton:hover {{
+                background-color: {COLORS['primary']};
+                opacity: 0.9;
+            }}
+            QCalendarWidget QToolButton:pressed {{
+                background-color: {COLORS['primary']};
+                opacity: 0.8;
+            }}
+            /* Buttons - cursor pointer when enabled */
+            QPushButton:enabled {{
+                cursor: pointer;
+            }}
         """)
     
     def _init_ui(self):
@@ -114,72 +174,81 @@ class MainWindow(QMainWindow):
         from_label.setStyleSheet(f"color: {COLORS['on_surface_variant']}; font-weight: 500; font-size: 11pt;")
         date_layout.addWidget(from_label)
         
-        # Compact Date Picker
-        self.date_from = QDateEdit()
-        self.date_from.setDate(QDate.currentDate())
-        self.date_from.setCalendarPopup(True)
-        self.date_from.setStyleSheet(f"""
-            QDateEdit {{
+        # Date range input with single calendar button
+        date_range_widget = QWidget()
+        date_range_layout = QHBoxLayout()
+        date_range_layout.setContentsMargins(0, 0, 0, 0)
+        date_range_layout.setSpacing(8)
+        
+        # From date input - disabled
+        self.date_from_input = QLineEdit()
+        self.date_from_input.setReadOnly(True)
+        self.date_from_input.setEnabled(False)
+        self.date_from_input.setText(QDate.currentDate().toString("dd.MM.yyyy"))
+        self.date_from_input.setStyleSheet(f"""
+            QLineEdit {{
                 padding: 6px 8px;
                 border: 1px solid {COLORS['outline_variant']};
                 border-radius: 4px;
-                background-color: {COLORS['surface']};
+                background-color: {COLORS['surface_variant']};
                 min-width: 120px;
                 font-size: 10pt;
                 color: {COLORS['on_surface']};
             }}
-            QDateEdit:hover {{
-                border-color: {COLORS['primary']};
-            }}
-            QDateEdit:focus {{
-                border: 2px solid {COLORS['primary']};
-            }}
-            QDateEdit::drop-down {{
-                border: none;
-                width: 24px;
-                background-color: transparent;
-            }}
-            QDateEdit::drop-down:hover {{
-                background-color: {COLORS['primary_container']};
-                border-radius: 12px;
-            }}
         """)
-        date_layout.addWidget(self.date_from)
+        date_range_layout.addWidget(self.date_from_input)
         
-        to_label = QLabel("To:")
-        to_label.setStyleSheet(f"color: {COLORS['on_surface_variant']}; font-weight: 500; font-size: 11pt;")
-        date_layout.addWidget(to_label)
+        # To label
+        to_label = QLabel("to")
+        to_label.setStyleSheet(f"color: {COLORS['on_surface_variant']}; font-weight: 500; font-size: 10pt;")
+        date_range_layout.addWidget(to_label)
         
-        self.date_to = QDateEdit()
-        self.date_to.setDate(QDate.currentDate())
-        self.date_to.setCalendarPopup(True)
-        self.date_to.setStyleSheet(f"""
-            QDateEdit {{
+        # To date input - disabled
+        self.date_to_input = QLineEdit()
+        self.date_to_input.setReadOnly(True)
+        self.date_to_input.setEnabled(False)
+        self.date_to_input.setText(QDate.currentDate().toString("dd.MM.yyyy"))
+        self.date_to_input.setStyleSheet(f"""
+            QLineEdit {{
                 padding: 6px 8px;
                 border: 1px solid {COLORS['outline_variant']};
                 border-radius: 4px;
-                background-color: {COLORS['surface']};
+                background-color: {COLORS['surface_variant']};
                 min-width: 120px;
                 font-size: 10pt;
                 color: {COLORS['on_surface']};
             }}
-            QDateEdit:hover {{
-                border-color: {COLORS['primary']};
-            }}
-            QDateEdit:focus {{
-                border: 2px solid {COLORS['primary']};
-            }}
-            QDateEdit::drop-down {{
+        """)
+        date_range_layout.addWidget(self.date_to_input)
+        
+        # Beautiful calendar button for range picker
+        self.date_range_button = QPushButton("📅")
+        self.date_range_button.setToolTip("Select Date Range")
+        self.date_range_button.clicked.connect(self._open_date_range_picker)
+        self.date_range_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.date_range_button.setStyleSheet(f"""
+            QPushButton {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {COLORS['primary']}, stop:1 #5A3F8F);
+                color: {COLORS['on_primary']};
                 border: none;
-                width: 24px;
-                background-color: transparent;
+                border-radius: 4px;
+                padding: 1px 8px;
+                font-size: 18pt;
+                min-width: 56px;
             }}
-            QDateEdit::drop-down:hover {{
-                background-color: {COLORS['primary_container']};
-                border-radius: 12px;
+            QPushButton:hover {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #7D5FB8, stop:1 {COLORS['primary']});
+            }}
+            QPushButton:pressed {{
+                background: {COLORS['primary']};
+                opacity: 0.9;
             }}
         """)
-        date_layout.addWidget(self.date_to)
+        date_range_layout.addWidget(self.date_range_button)
+        date_range_widget.setLayout(date_range_layout)
+        date_layout.addWidget(date_range_widget)
         
         date_layout.addStretch()
         date_group.setLayout(date_layout)
@@ -223,6 +292,7 @@ class MainWindow(QMainWindow):
         self.parse_button = QPushButton("🚀 Start Parsing")
         self.parse_button.setMinimumHeight(56)
         self.parse_button.clicked.connect(self._on_start_parsing)
+        self.parse_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.parse_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['primary']};
@@ -254,6 +324,7 @@ class MainWindow(QMainWindow):
         # Material Design 3 Outlined Button
         create_table_button = QPushButton("➕ Create Table")
         create_table_button.clicked.connect(self._on_create_table)
+        create_table_button.setCursor(Qt.CursorShape.PointingHandCursor)
         create_table_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: transparent;
@@ -273,6 +344,7 @@ class MainWindow(QMainWindow):
         
         settings_button = QPushButton("⚙️ Settings")
         settings_button.clicked.connect(self._on_settings)
+        settings_button.setCursor(Qt.CursorShape.PointingHandCursor)
         settings_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: transparent;
@@ -294,6 +366,47 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(buttons_frame)
         
         main_layout.addStretch()
+    
+    def _open_date_range_picker(self):
+        """Open the Material Design date range picker dialog."""
+        try:
+            # Get current dates
+            current_start = self.date_from_input.text()
+            current_end = self.date_to_input.text()
+            
+            # Open the date range picker
+            start, end = MaterialDateRangeDialog.get_range(
+                self.date_range_button, 
+                current_start, 
+                current_end
+            )
+            
+            # Update UI if a range was selected
+            if start and end:
+                self.date_from_input.setText(start)
+                self.date_to_input.setText(end)
+        except Exception as e:
+            logger.exception("Error opening date range picker")
+            QMessageBox.warning(
+                self,
+                "Calendar Error",
+                f"Could not open calendar picker:\n{str(e)}"
+            )
+    
+    def _parse_date_string(self, date_str):
+        """Parse date string in format 'd.m.Y' to QDate."""
+        try:
+            # Handle format like "21.02.2026"
+            date_obj = datetime.strptime(date_str, "%d.%m.%Y")
+            return QDate(date_obj.year, date_obj.month, date_obj.day)
+        except ValueError:
+            # Try alternative format
+            try:
+                date_obj = datetime.strptime(date_str, "%d.%m.%y")
+                return QDate(date_obj.year, date_obj.month, date_obj.day)
+            except ValueError:
+                logger.warning(f"Could not parse date string: {date_str}")
+                return QDate.currentDate()
     
     def _check_missing_days(self):
         """Check for missing days and display notification."""
@@ -354,8 +467,11 @@ class MainWindow(QMainWindow):
             logger.info("Start parsing button clicked")
             
             table_name = self.config.default_table
-            date_from = self.date_from.date().toPyDate()
-            date_to = self.date_to.date().toPyDate()
+            # Parse date strings from input fields
+            date_from_qdate = self._parse_date_string(self.date_from_input.text())
+            date_to_qdate = self._parse_date_string(self.date_to_input.text())
+            date_from = date_from_qdate.toPyDate()
+            date_to = date_to_qdate.toPyDate()
             
             # Validate date range
             if date_from > date_to:
