@@ -2,11 +2,11 @@
 import logging
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QComboBox, QLabel, QDateEdit, QMessageBox, QDialog
+    QPushButton, QLabel, QDateEdit, QMessageBox, QDialog
 )
 from PyQt6.QtCore import QDate
 from datetime import date
-from ..config import Config, AVAILABLE_TABLES
+from ..config import Config
 from ..database.db_manager import DatabaseManager
 from ..utils.date_tracker import DateTracker
 
@@ -35,15 +35,6 @@ class MainWindow(QMainWindow):
         
         layout = QVBoxLayout()
         central_widget.setLayout(layout)
-        
-        # Table selection
-        table_layout = QHBoxLayout()
-        table_layout.addWidget(QLabel("Table:"))
-        self.table_combo = QComboBox()
-        self.table_combo.addItems(AVAILABLE_TABLES)
-        self.table_combo.setCurrentText(self.config.default_table)
-        table_layout.addWidget(self.table_combo)
-        layout.addLayout(table_layout)
         
         # Date range selection
         date_layout = QHBoxLayout()
@@ -94,7 +85,7 @@ class MainWindow(QMainWindow):
     
     def _check_missing_days(self):
         """Check for missing days and display notification."""
-        table_name = self.table_combo.currentText()
+        table_name = self.config.default_table
         today = self.date_tracker.get_today()
         
         # Check last 30 days for missing dates
@@ -126,7 +117,7 @@ class MainWindow(QMainWindow):
             logger.info("Start parsing button clicked")
             print("[INFO] Start parsing button clicked")
             
-            table_name = self.table_combo.currentText()
+            table_name = self.config.default_table
             date_from = self.date_from.date().toPyDate()
             date_to = self.date_to.date().toPyDate()
             
@@ -196,14 +187,8 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             created_table = dialog.get_created_table_name()
             if created_table:
-                # Refresh table combo box
-                self.table_combo.clear()
-                from ..config import AVAILABLE_TABLES
-                # Add the new table to the list
-                if created_table not in AVAILABLE_TABLES:
-                    AVAILABLE_TABLES.append(created_table)
-                self.table_combo.addItems(AVAILABLE_TABLES)
-                self.table_combo.setCurrentText(created_table)
+                # Update default table to the newly created one
+                self.config.default_table = created_table
                 logger.info(f"Created new table: {created_table}")
                 print(f"[INFO] Created new table: {created_table}")
 
