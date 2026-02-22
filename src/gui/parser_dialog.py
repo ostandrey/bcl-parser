@@ -9,8 +9,8 @@ from typing import List, Optional, Dict
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
     QTableWidget, QTableWidgetItem, QLabel, QProgressBar,
-    QMessageBox, QSpinBox, QCheckBox, QTextEdit, QLineEdit, QFileDialog, QWidget,
-    QFrame, QGroupBox
+    QMessageBox, QCheckBox, QTextEdit, QLineEdit,
+    QFileDialog, QWidget, QGroupBox, QSizePolicy,
 )
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QFont
@@ -25,40 +25,34 @@ from ..export.excel_exporter import export_entries_to_xlsx
 
 logger = logging.getLogger(__name__)
 
-# Constants
 DEFAULT_MEDIA_TABLE = 'ЗМІ 2025'
 MAX_ERROR_DISPLAY = 20
 NOTE_TRUNCATE_LENGTH = 100
-NOTE_DISPLAY_LENGTH = 50
 
-# Material Design 3 color scheme (shared with main_window)
 COLORS = {
-    'primary': '#6750A4',  # M3 Primary Purple
-    'primary_container': '#EADDFF',
-    'on_primary': '#FFFFFF',
-    'secondary': '#625B71',
-    'secondary_container': '#E8DEF8',
-    'tertiary': '#7D5260',
-    'surface': '#FFFBFE',  # M3 Surface
-    'surface_variant': '#E7E0EC',
-    'background': '#FEF7FF',  # M3 Background
-    'on_surface': '#1C1B1F',
+    'primary':            '#6750A4',
+    'primary_container':  '#EADDFF',
+    'on_primary':         '#FFFFFF',
+    'secondary':          '#625B71',
+    'secondary_container':'#E8DEF8',
+    'surface':            '#FFFBFE',
+    'surface_variant':    '#F3EFF8',
+    'background':         '#FEF7FF',
+    'on_surface':         '#1C1B1F',
     'on_surface_variant': '#49454F',
-    'outline': '#79747E',
-    'outline_variant': '#CAC4D0',
-    'shadow': 'rgba(0, 0, 0, 0.15)',
-    'scrim': 'rgba(0, 0, 0, 0.32)',
-    'error': '#BA1A1A',
-    'error_container': '#F9DEDC',
-    'success': '#1B5E20',
-    'success_container': '#C8E6C9',
-    'warning': '#F57C00',
-    'warning_container': '#FFE0B2',
+    'outline':            '#79747E',
+    'outline_variant':    '#CAC4D0',
+    'shadow':             'rgba(0,0,0,0.15)',
+    'error':              '#BA1A1A',
+    'error_container':    '#F9DEDC',
+    'success':            '#1B5E20',
+    'success_container':  '#C8E6C9',
+    'warning':            '#F57C00',
+    'warning_container':  '#FFE0B2',
 }
 
 
 def _group_entries_by_table(entries: List[ParsedEntry]) -> Dict[str, List[ParsedEntry]]:
-    """Group entries by their table name."""
     entries_by_table = defaultdict(list)
     for entry in entries:
         table_name = entry.table_name or DEFAULT_MEDIA_TABLE
@@ -66,11 +60,12 @@ def _group_entries_by_table(entries: List[ParsedEntry]) -> Dict[str, List[Parsed
     return entries_by_table
 
 
+# ── Threads ────────────────────────────────────────────────────────────────────
+
 class ExcelExportThread(QThread):
-    """Thread for exporting entries to Excel file."""
     progress = pyqtSignal(int, int, str)
     finished = pyqtSignal(str)
-    failed = pyqtSignal(str)
+    failed   = pyqtSignal(str)
 
     def __init__(self, entries: List[ParsedEntry], output_path: str):
         super().__init__()
@@ -78,130 +73,236 @@ class ExcelExportThread(QThread):
         self._output_path = output_path
 
     def run(self):
-        """Run Excel export in thread."""
         try:
-            def cb(current, total, message):
-                self.progress.emit(current, total, message)
-
-            out = export_entries_to_xlsx(self._entries, self._output_path, progress_callback=cb)
+            out = export_entries_to_xlsx(
+                self._entries, self._output_path,
+                progress_callback=lambda c, t, m: self.progress.emit(c, t, m)
+            )
             self.finished.emit(str(out))
         except Exception as e:
             self.failed.emit(str(e))
 
 
 class ParsingThread(QThread):
-    """Thread for parsing to avoid blocking UI."""
-    progress = pyqtSignal(int, int, str)  # current, total, message
-    entry_parsed = pyqtSignal(object)  # ParsedEntry
-    finished = pyqtSignal(list, list)  # entries, errors
-    error = pyqtSignal(str, object)  # error message, entry
-    
-    def __init__(
-        self, 
-        parser: YouScanParser,
-        dates: List[date],
-        table_name: str
-    ):
+    progress     = pyqtSignal(int, int, str)
+    entry_parsed = pyqtSignal(object)
+    finished     = pyqtSignal(list, list)
+    error        = pyqtSignal(str, object)
+
+    def __init__(self, parser: YouScanParser, dates: List[date], table_name: str):
         super().__init__()
-        self.parser = parser
-        self.dates = dates
+        self.parser     = parser
+        self.dates      = dates
         self.table_name = table_name
-        self.entries = []
-        self.errors = []
+        self.entries    = []
+        self.errors     = []
         self._stop_requested = False
-    
+
     def run(self):
-        """Run parsing in thread."""
-        # Create new event loop for this thread
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
         try:
-            # Run async parsing
             loop.run_until_complete(self._run_async())
         finally:
             loop.close()
-    
+
     async def _run_async(self):
-        """Async parsing logic."""
-        # Start browser in async mode
         try:
-            logger.info("Starting browser in async mode...")
             await self.parser.start_async()
-            logger.info("Browser started successfully")
         except Exception as e:
-            logger.exception("Failed to start browser")
-            self.errors.append({
-                'date': None,
-                'error': f"Failed to start browser: {str(e)}",
-                'entry': None
-            })
+            self.errors.append({'date': None, 'error': f"Failed to start browser: {e}", 'entry': None})
             self.finished.emit(self.entries, self.errors)
             return
-        
+
         try:
             total_days = len(self.dates)
-            logger.info(f"Starting to parse {total_days} day(s)")
-            
-            # Set the full date range once at the beginning
             if self.dates:
-                date_from = min(self.dates)
-                date_to = max(self.dates)
-                logger.info(f"Setting date range for full period: {date_from} to {date_to}")
-                await self.parser.set_date_range_async(date_from, date_to)
-            else:
-                logger.warning("No dates to parse")
-            
+                await self.parser.set_date_range_async(min(self.dates), max(self.dates))
+
             for day_idx, target_date in enumerate(self.dates):
                 if self._stop_requested:
                     break
-                
                 self.progress.emit(day_idx + 1, total_days, f"Parsing {target_date}")
-                logger.info(f"Parsing date: {target_date}")
-                
                 try:
-                    # Parse all entries for this day (date range already set above)
-                    logger.info(f"Fetching entries for {target_date}")
                     day_entries = await self.parser.parse_all_entries_async(target_date)
-                    logger.info(f"Found {len(day_entries)} entries for {target_date}")
-                    
                     for entry in day_entries:
                         if self._stop_requested:
                             break
-                        # entry.table_name is already set by detect_table_from_entry() in parser
-                        # Don't override it - let entries go to their automatically detected tables
                         self.entries.append(entry)
                         self.entry_parsed.emit(entry)
-                    
                 except Exception as e:
-                    error_info = {
-                        'date': target_date,
-                        'error': str(e),
-                        'entry': None
-                    }
-                    self.errors.append(error_info)
-                    logger.exception(f"Error parsing {target_date}")
-                    self.error.emit(f"Error parsing {target_date}: {str(e)}", None)
+                    self.errors.append({'date': target_date, 'error': str(e), 'entry': None})
+                    self.error.emit(f"Error parsing {target_date}: {e}", None)
         finally:
-            # Close browser
             try:
-                logger.info("Closing browser...")
                 await self.parser.close_async()
-                logger.info("Browser closed")
             except Exception as e:
                 logger.warning(f"Error closing browser: {e}")
-        
-        logger.info(f"Parsing finished. Total entries: {len(self.entries)}, Errors: {len(self.errors)}")
+
         self.finished.emit(self.entries, self.errors)
-    
+
     def stop(self):
-        """Request to stop parsing."""
         self._stop_requested = True
 
 
+# ── Helper widgets ─────────────────────────────────────────────────────────────
+
+class _Badge(QLabel):
+    """Small pill badge: «6 entries» / «0 errors»."""
+    def __init__(self, count: int, label: str, text_color: str, bg_color: str, parent=None):
+        super().__init__(parent)
+        self._text_color = text_color
+        self._bg_color   = bg_color
+        self.set_value(count, label)
+
+    def set_value(self, count: int, label: str):
+        self.setText(f"  {count} {label}  ")
+        self.setStyleSheet(f"""
+            QLabel {{
+                background-color: {self._bg_color};
+                color: {self._text_color};
+                border-radius: 12px;
+                padding: 3px 10px;
+                font-size: 11pt;
+                font-weight: 600;
+            }}
+        """)
+
+
+class _SectionCard(QGroupBox):
+    """Rounded card with bold title."""
+    def __init__(self, title: str, accent: str = None, parent=None):
+        super().__init__(title, parent)
+        accent = accent or COLORS['on_surface']
+        self.setStyleSheet(f"""
+            QGroupBox {{
+                font-weight: 700;
+                font-size: 11pt;
+                color: {accent};
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 10px;
+                margin-top: 14px;
+                background-color: {COLORS['surface']};
+                padding-top: 4px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 14px;
+                padding: 0 6px;
+                background-color: {COLORS['surface']};
+            }}
+        """)
+
+
+def _make_social_pill(text: str) -> QWidget:
+    """Фиолетовый pill-тег для колонки Social Network."""
+    container = QWidget()
+    layout = QHBoxLayout(container)
+    layout.setContentsMargins(4, 2, 4, 2)
+    layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+    lbl = QLabel(text)
+    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    lbl.setStyleSheet(f"""
+        QLabel {{
+            background-color: {COLORS['primary_container']};
+            color: {COLORS['primary']};
+            border-radius: 10px;
+            padding: 2px 10px;
+            font-size: 9pt;
+            font-weight: 600;
+        }}
+    """)
+    layout.addWidget(lbl)
+    container.setStyleSheet("background: transparent;")
+    return container
+
+def _make_table_pill(table_name: str, count: int, checked: bool = True) -> QWidget:
+    """Pill с чекбоксом, названием таблицы и badge-числом."""
+    container = QWidget()
+    container.setFixedHeight(36)
+    container.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+    container.setObjectName("pill_container")
+    container.setStyleSheet(f"""
+        QWidget#pill_container {{
+            background-color: {COLORS['primary_container']};
+            border: 1.5px solid {COLORS['primary']};
+            border-radius: 18px;
+        }}
+    """)
+
+    layout = QHBoxLayout(container)
+    layout.setContentsMargins(10, 0, 14, 0)
+    layout.setSpacing(8)
+
+    cb = QCheckBox()
+    cb.setChecked(checked)
+    cb.setStyleSheet(f"""
+        QCheckBox {{
+            spacing: 0px;
+            background: transparent;
+        }}
+        QCheckBox::indicator {{
+            width: 18px;
+            height: 18px;
+            border: 2px solid {COLORS['primary']};
+            border-radius: 4px;
+            background: {COLORS['surface']};
+        }}
+        QCheckBox::indicator:hover {{
+            border-color: {COLORS['primary']};
+            background: {COLORS['primary_container']};
+        }}
+        QCheckBox::indicator:checked {{
+            background-color: {COLORS['primary']};
+            border-color: {COLORS['primary']};
+            image: url({(Path(__file__).parent / 'checkmark.svg').as_posix()});
+        }}
+        QCheckBox::indicator:checked:hover {{
+            background-color: #7965AF;
+            border-color: #7965AF;
+        }}
+    """)
+
+    name_lbl = QLabel(table_name)
+    name_lbl.setStyleSheet(f"""
+        QLabel {{
+            color: {COLORS['primary']};
+            font-weight: 600;
+            font-size: 10pt;
+            background: transparent;
+            border: none;
+        }}
+    """)
+
+    badge = QLabel(str(count))
+    badge.setFixedSize(22, 22)
+    badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    badge.setStyleSheet(f"""
+        QLabel {{
+            background-color: {COLORS['primary']};
+            color: white;
+            border-radius: 11px;
+            font-size: 9pt;
+            font-weight: 700;
+            border: none;
+        }}
+    """)
+
+    layout.addWidget(cb)
+    layout.addWidget(name_lbl)
+    layout.addWidget(badge)
+
+    container.setProperty('checkbox', cb)
+    container.setProperty('table_name', table_name)
+    return container
+
+# ── Main dialog ────────────────────────────────────────────────────────────────
+
 class ParserDialog(QDialog):
     """Dialog for parsing with preview and submission."""
-    
+
     def __init__(
         self,
         parent,
@@ -210,150 +311,134 @@ class ParserDialog(QDialog):
         date_tracker: DateTracker,
         table_name: str,
         date_from: date,
-        date_to: date
+        date_to: date,
     ):
         super().__init__(parent)
-        self.config = config
-        self.db_manager = db_manager
+        self.config       = config
+        self.db_manager   = db_manager
         self.date_tracker = date_tracker
-        self.table_name = table_name
-        self.date_from = date_from
-        self.date_to = date_to
-        
-        self.entries: List[ParsedEntry] = []
-        self.errors: List[Dict] = []
-        self.parser: Optional[YouScanParser] = None
+        self.table_name   = table_name
+        self.date_from    = date_from
+        self.date_to      = date_to
+
+        self.entries: List[ParsedEntry]       = []
+        self.errors:  List[Dict]              = []
+        self.parser:  Optional[YouScanParser] = None
         self.parsing_thread: Optional[ParsingThread] = None
-        self.table_checkboxes: Dict[str, QCheckBox] = {}  # {table_name: checkbox}
-        
+        self._pill_widgets: Dict[str, QWidget] = {}
+
         self.setWindowTitle("Parsing Data")
-        self.setMinimumSize(900, 700)
+        self.setMinimumSize(1280, 720)
         self._apply_styles()
         self._init_ui()
-    
+
+    # ── Styles ─────────────────────────────────────────────────────────────────
+
     def _apply_styles(self):
-        """Apply dialog-wide styles."""
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: {COLORS['background']};
             }}
-            QWidget {{
-                font-family: 'Segoe UI', 'Arial', sans-serif;
-                font-size: 10pt;
+            * {{
+                font-family: 'Segoe UI', Arial, sans-serif;
             }}
         """)
-    
+
+    # ── UI build ───────────────────────────────────────────────────────────────
+
     def _init_ui(self):
-        """Initialize UI."""
-        layout = QVBoxLayout()
-        layout.setSpacing(8)
-        layout.setContentsMargins(12, 12, 12, 12)
-        self.setLayout(layout)
-        
-        # Progress section - Compact
-        progress_group = QGroupBox("Progress")
-        progress_group.setStyleSheet(f"""
-            QGroupBox {{
-                font-weight: 600;
-                font-size: 12pt;
-                border: 1px solid {COLORS['outline_variant']};
-                border-radius: 6px;
-                margin-top: 8px;
-                padding-top: 12px;
-                background-color: {COLORS['surface']};
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 8px;
-                padding: 0 4px;
-                color: {COLORS['on_surface']};
-            }}
-        """)
-        progress_layout = QVBoxLayout()
-        progress_layout.setSpacing(6)
-        progress_layout.setContentsMargins(10, 8, 10, 10)
-        
+        root = QVBoxLayout(self)
+        root.setSpacing(10)
+        root.setContentsMargins(16, 16, 16, 16)
+
+        # ── Header ──────────────────────────────────────────────────────────
+        header = QHBoxLayout()
+        header.setSpacing(8)
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(2)
+        title_lbl = QLabel("Parsing Data")
+        title_lbl.setStyleSheet(f"font-size: 16pt; font-weight: 700; color: {COLORS['primary']};")
+        sub_lbl = QLabel("YouScan → Google Sheets")
+        sub_lbl.setStyleSheet(f"font-size: 9pt; color: {COLORS['on_surface_variant']};")
+        title_col.addWidget(title_lbl)
+        title_col.addWidget(sub_lbl)
+        header.addLayout(title_col)
+        header.addStretch()
+
+        self._entries_badge = _Badge(0, "entries", COLORS['primary'], COLORS['primary_container'])
+        self._errors_badge  = _Badge(0, "errors",  COLORS['success'], COLORS['success_container'])
+        header.addWidget(self._entries_badge)
+        header.addWidget(self._errors_badge)
+        root.addLayout(header)
+
+        # ── Progress card ────────────────────────────────────────────────────
+        prog_card = _SectionCard("Progress")
+        prog_layout = QVBoxLayout(prog_card)
+        prog_layout.setContentsMargins(14, 18, 14, 14)
+        prog_layout.setSpacing(6)
+
+        status_row = QHBoxLayout()
         self.status_label = QLabel("Preparing to parse...")
-        self.status_label.setStyleSheet(f"color: {COLORS['on_surface_variant']}; font-size: 10pt; font-weight: 400;")
-        progress_layout.addWidget(self.status_label)
-        
-        # Progress bar with visible percentage
+        self.status_label.setStyleSheet(f"font-size: 10pt; color: {COLORS['on_surface_variant']};")
+        self._pct_label = QLabel("0%")
+        self._pct_label.setStyleSheet(f"font-size: 10pt; font-weight: 600; color: {COLORS['primary']};")
+        status_row.addWidget(self.status_label)
+        status_row.addStretch()
+        status_row.addWidget(self._pct_label)
+        prog_layout.addLayout(status_row)
+
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(10)
         self.progress_bar.setStyleSheet(f"""
             QProgressBar {{
-                border: 1px solid {COLORS['outline_variant']};
-                border-radius: 4px;
-                text-align: center;
-                height: 24px;
+                border: none;
+                border-radius: 5px;
                 background-color: {COLORS['surface_variant']};
-                color: {COLORS['on_surface']};
-                font-size: 10pt;
-                font-weight: 500;
             }}
             QProgressBar::chunk {{
+                border-radius: 5px;
                 background-color: {COLORS['primary']};
-                border-radius: 3px;
             }}
         """)
-        progress_layout.addWidget(self.progress_bar)
-        
-        progress_group.setLayout(progress_layout)
-        layout.addWidget(progress_group)
-        
-        # Parsed Entries - Compact and Visible
-        table_group = QGroupBox("Parsed Entries")
-        table_group.setStyleSheet(f"""
-            QGroupBox {{
-                font-weight: 600;
-                font-size: 12pt;
-                border: 1px solid {COLORS['outline_variant']};
-                border-radius: 6px;
-                margin-top: 8px;
-                padding-top: 12px;
-                background-color: {COLORS['surface']};
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 8px;
-                padding: 0 4px;
-                color: {COLORS['on_surface']};
-            }}
-        """)
-        table_layout = QVBoxLayout()
-        table_layout.setContentsMargins(8, 8, 8, 8)
+        prog_layout.addWidget(self.progress_bar)
+        root.addWidget(prog_card)
+
+        # ── Parsed Entries card ──────────────────────────────────────────────
+        self._table_card = _SectionCard("Parsed Entries")
+        table_layout = QVBoxLayout(self._table_card)
+        table_layout.setContentsMargins(10, 18, 10, 10)
         table_layout.setSpacing(4)
-        
+
         self.entries_table = QTableWidget()
         self.entries_table.setColumnCount(7)
-        self.entries_table.setHorizontalHeaderLabels([
-            'Table', 'Name', 'Social Network', 'Tag', 'Link', 'Note', 'Description'
-        ])
+        self.entries_table.setHorizontalHeaderLabels(
+            ['Table', 'Name', 'Social Network', 'Tag', 'Link', 'Note', 'Description']
+        )
         self.entries_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.entries_table.setColumnWidth(0, 100)
-        self.entries_table.setColumnWidth(1, 120)
-        self.entries_table.setColumnWidth(2, 100)
-        self.entries_table.setColumnWidth(3, 100)
-        self.entries_table.setColumnWidth(4, 150)
-        self.entries_table.setColumnWidth(5, 150)
-        self.entries_table.setColumnWidth(6, 200)
-        self.entries_table.setAlternatingRowColors(True)
         self.entries_table.verticalHeader().setVisible(False)
         self.entries_table.setShowGrid(True)
+        self.entries_table.setAlternatingRowColors(True)
+        self.entries_table.setColumnWidth(0, 150)
+        self.entries_table.setColumnWidth(1, 160)
+        self.entries_table.setColumnWidth(2, 130)
+        self.entries_table.setColumnWidth(3, 90)
+        self.entries_table.setColumnWidth(4, 180)
+        self.entries_table.setColumnWidth(5, 200)
+        self.entries_table.horizontalHeader().setStretchLastSection(True)
         self.entries_table.setStyleSheet(f"""
             QTableWidget {{
                 border: 1px solid {COLORS['outline_variant']};
-                border-radius: 4px;
+                border-radius: 8px;
                 background-color: {COLORS['surface']};
                 gridline-color: {COLORS['outline_variant']};
                 font-size: 9pt;
+                color: {COLORS['on_surface']};
             }}
             QTableWidget::item {{
-                padding: 4px 6px;
-                border: none;
-                color: {COLORS['on_surface']};
+                padding: 5px 8px;
             }}
             QTableWidget::item:alternate {{
                 background-color: {COLORS['surface_variant']};
@@ -367,502 +452,398 @@ class ParserDialog(QDialog):
             }}
             QHeaderView::section {{
                 background-color: {COLORS['primary_container']};
-                padding: 6px 8px;
+                color: {COLORS['primary']};
+                padding: 7px 8px;
                 border: none;
-                border-bottom: 1px solid {COLORS['primary']};
+                border-bottom: 2px solid {COLORS['primary']};
                 border-right: 1px solid {COLORS['outline_variant']};
-                font-weight: 600;
+                font-weight: 700;
                 font-size: 10pt;
-                color: {COLORS['on_surface']};
             }}
             QScrollBar:vertical {{
                 border: none;
-                background-color: {COLORS['surface_variant']};
-                width: 12px;
-                border-radius: 6px;
+                background: {COLORS['surface_variant']};
+                width: 10px;
+                border-radius: 5px;
             }}
             QScrollBar::handle:vertical {{
-                background-color: {COLORS['outline']};
-                border-radius: 6px;
-                min-height: 30px;
+                background: {COLORS['outline']};
+                border-radius: 5px;
+                min-height: 24px;
             }}
             QScrollBar::handle:vertical:hover {{
-                background-color: {COLORS['primary']};
+                background: {COLORS['primary']};
+            }}
+            QScrollBar:horizontal {{
+                border: none;
+                background: {COLORS['surface_variant']};
+                height: 10px;
+                border-radius: 5px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: {COLORS['outline']};
+                border-radius: 5px;
+                min-width: 24px;
             }}
         """)
         table_layout.addWidget(self.entries_table)
-        table_group.setLayout(table_layout)
-        layout.addWidget(table_group)
-        
-        # Table selection section - Compact
-        self.table_selection_group = QGroupBox("Tables to Write")
-        self.table_selection_group.setStyleSheet(f"""
-            QGroupBox {{
-                font-weight: 600;
-                font-size: 12pt;
-                border: 1px solid {COLORS['outline_variant']};
-                border-radius: 6px;
-                margin-top: 8px;
-                padding-top: 12px;
-                background-color: {COLORS['surface']};
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 8px;
-                padding: 0 4px;
-                color: {COLORS['on_surface']};
-            }}
-        """)
-        self.table_checkboxes_layout = QVBoxLayout()
-        self.table_checkboxes_layout.setContentsMargins(10, 8, 10, 10)
-        self.table_checkboxes_layout.setSpacing(4)
-        self.table_selection_group.setLayout(self.table_checkboxes_layout)
+        root.addWidget(self._table_card)
+        root.setStretch(root.count() - 1, 1)
+
+        # ── Tables to Write card ─────────────────────────────────────────────
+        self.table_selection_group = _SectionCard("Tables to Write", accent=COLORS['primary'])
+        self._pills_layout = QHBoxLayout()
+        self._pills_layout.setContentsMargins(14, 18, 14, 14)
+        self._pills_layout.setSpacing(10)
+        self._pills_layout.addStretch()
+        self.table_selection_group.setLayout(self._pills_layout)
         self.table_selection_group.setVisible(False)
-        layout.addWidget(self.table_selection_group)
-        
-        # Store table checkboxes
-        self.table_checkboxes = {}  # {table_name: checkbox}
-        
-        # Errors section - Compact
-        self.errors_group = QGroupBox("Errors")
-        self.errors_group.setStyleSheet(f"""
-            QGroupBox {{
-                font-weight: 600;
-                font-size: 12pt;
-                border: 1px solid {COLORS['error']};
-                border-radius: 6px;
-                margin-top: 8px;
-                padding-top: 12px;
-                background-color: {COLORS['error_container']};
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 8px;
-                padding: 0 4px;
-                color: {COLORS['error']};
-            }}
-        """)
-        errors_layout = QVBoxLayout()
-        errors_layout.setContentsMargins(10, 8, 10, 10)
-        errors_layout.setSpacing(4)
-        
-        self.errors_checkbox = QCheckBox("Show Errors")
-        self.errors_checkbox.setChecked(False)
+        root.addWidget(self.table_selection_group)
+
+        # ── Errors card (hidden until errors) ───────────────────────────────
+        self.errors_group = _SectionCard("Errors")
+        self.errors_group.setStyleSheet(
+            self.errors_group.styleSheet()
+            .replace(f"color: {COLORS['on_surface']};", f"color: {COLORS['error']};")
+            .replace(f"border: 1px solid {COLORS['outline_variant']};",
+                     f"border: 1px solid {COLORS['error']};")
+            .replace(f"background-color: {COLORS['surface']};",
+                     f"background-color: {COLORS['error_container']};")
+        )
+        self.errors_group.setVisible(False)
+        errors_layout = QVBoxLayout(self.errors_group)
+        errors_layout.setContentsMargins(14, 18, 14, 14)
+        errors_layout.setSpacing(6)
+
+        self.errors_checkbox = QCheckBox("Show error details")
         self.errors_checkbox.setStyleSheet(f"""
             QCheckBox {{
-                color: {COLORS['on_surface']};
-                font-weight: 400;
+                color: {COLORS['error']};
+                font-weight: 500;
                 font-size: 10pt;
                 spacing: 6px;
             }}
             QCheckBox::indicator {{
-                width: 16px;
-                height: 16px;
-                border: 2px solid {COLORS['outline']};
+                width: 16px; height: 16px;
+                border: 2px solid {COLORS['error']};
                 border-radius: 3px;
-                background-color: {COLORS['surface']};
+                background: {COLORS['surface']};
             }}
             QCheckBox::indicator:checked {{
-                background-color: {COLORS['primary']};
-                border-color: {COLORS['primary']};
-                image: none;
-            }}
-            QCheckBox::indicator:checked::after {{
-                content: "✓";
-                color: {COLORS['on_primary']};
+                background: {COLORS['error']};
+                border-color: {COLORS['error']};
             }}
         """)
         self.errors_checkbox.toggled.connect(self._toggle_errors)
         errors_layout.addWidget(self.errors_checkbox)
-        
+
         self.errors_text = QTextEdit()
         self.errors_text.setMaximumHeight(80)
         self.errors_text.setVisible(False)
         self.errors_text.setStyleSheet(f"""
             QTextEdit {{
                 border: 1px solid {COLORS['outline_variant']};
-                border-radius: 4px;
-                background-color: {COLORS['surface']};
+                border-radius: 6px;
+                background: {COLORS['surface']};
                 padding: 6px;
                 font-size: 9pt;
             }}
         """)
         errors_layout.addWidget(self.errors_text)
-        self.errors_group.setLayout(errors_layout)
-        layout.addWidget(self.errors_group)
-        
-        # Options section - Compact
-        options_group = QGroupBox("Options")
-        options_group.setStyleSheet(f"""
-            QGroupBox {{
-                font-weight: 600;
-                font-size: 12pt;
-                border: 1px solid {COLORS['outline_variant']};
-                border-radius: 6px;
-                margin-top: 8px;
-                padding-top: 12px;
-                background-color: {COLORS['surface']};
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 8px;
-                padding: 0 4px;
-                color: {COLORS['on_surface']};
-            }}
-        """)
-        options_layout = QVBoxLayout()
-        options_layout.setSpacing(6)
-        options_layout.setContentsMargins(10, 8, 10, 10)
-        
-        row_layout = QHBoxLayout()
-        row_layout.setSpacing(10)
-        row_label = QLabel("Insert at row:")
-        row_label.setStyleSheet(f"color: {COLORS['on_surface_variant']}; font-weight: 500; font-size: 11pt;")
-        row_layout.addWidget(row_label)
-        
-        # Compact SpinBox
-        self.row_spinbox = QSpinBox()
-        self.row_spinbox.setMinimum(2)
-        self.row_spinbox.setMaximum(100000)
-        self.row_spinbox.setValue(0)  # 0 means auto (end of list)
-        self.row_spinbox.setSpecialValueText("Auto (end of list)")
-        self.row_spinbox.setStyleSheet(f"""
-            QSpinBox {{
-                padding: 6px 8px;
-                border: 1px solid {COLORS['outline_variant']};
-                border-radius: 4px;
-                background-color: {COLORS['surface']};
-                min-width: 150px;
-                font-size: 10pt;
-                color: {COLORS['on_surface']};
-            }}
-            QSpinBox:hover {{
-                border-color: {COLORS['primary']};
-            }}
-            QSpinBox:focus {{
-                border: 2px solid {COLORS['primary']};
-            }}
-            QSpinBox::up-button, QSpinBox::down-button {{
-                border: none;
-                background-color: transparent;
-                width: 24px;
-            }}
-            QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
-                background-color: {COLORS['primary_container']};
-                border-radius: 12px;
-            }}
-        """)
-        row_layout.addWidget(self.row_spinbox)
-        row_layout.addStretch()
-        options_layout.addLayout(row_layout)
+        root.addWidget(self.errors_group)
 
-        # Offline export (Excel) options
-        export_label = QLabel("Export path:")
-        export_label.setStyleSheet(f"color: {COLORS['on_surface_variant']}; font-weight: 500; font-size: 11pt;")
-        options_layout.addWidget(export_label)
-        
-        export_path_layout = QHBoxLayout()
-        export_path_layout.setSpacing(10)
+        # ── Options card ─────────────────────────────────────────────────────
+        options_card = _SectionCard("Options")
+        options_layout = QVBoxLayout(options_card)
+        options_layout.setContentsMargins(14, 18, 14, 14)
+        options_layout.setSpacing(10)
 
-        # Compact LineEdit
+        # Export path label
+        exp_lbl = QLabel("Export path:")
+        exp_lbl.setStyleSheet(
+            f"font-size: 10pt; font-weight: 500; color: {COLORS['on_surface_variant']};"
+        )
+        options_layout.addWidget(exp_lbl)
+
+        # Export path row
+        exp_h = QHBoxLayout()
+        exp_h.setSpacing(8)
+
         self.export_path_input = QLineEdit()
-        self.export_path_input.setPlaceholderText("Select a folder or file path for the Excel report...")
+        self.export_path_input.setPlaceholderText("Select a folder for the Excel report…")
         self.export_path_input.setText(self.config.export_dir)
+        self.export_path_input.setFixedHeight(36)
         self.export_path_input.setStyleSheet(f"""
             QLineEdit {{
-                padding: 6px 8px;
+                padding: 6px 10px;
                 border: 1px solid {COLORS['outline_variant']};
-                border-radius: 4px;
-                background-color: {COLORS['surface']};
+                border-radius: 8px;
+                background: {COLORS['surface']};
                 font-size: 10pt;
                 color: {COLORS['on_surface']};
             }}
-            QLineEdit:hover {{
-                border-color: {COLORS['primary']};
-            }}
-            QLineEdit:focus {{
-                border: 2px solid {COLORS['primary']};
-            }}
+            QLineEdit:hover {{ border-color: {COLORS['primary']}; }}
+            QLineEdit:focus {{ border: 2px solid {COLORS['primary']}; }}
         """)
-        export_path_layout.addWidget(self.export_path_input)
+        exp_h.addWidget(self.export_path_input)
 
-        # Material Design 3 Outlined Button
         self.browse_export_button = QPushButton("Browse…")
         self.browse_export_button.clicked.connect(self._on_browse_export_path)
+        self.browse_export_button.setFixedHeight(36)
         self.browse_export_button.setStyleSheet(f"""
             QPushButton {{
-                background-color: transparent;
+                background: transparent;
                 color: {COLORS['primary']};
-                border: 1px solid {COLORS['outline']};
-                border-radius: 20px;
-                padding: 10px 24px;
-                font-weight: 500;
-                font-size: 11pt;
+                border: 1.5px solid {COLORS['primary']};
+                border-radius: 18px;
+                padding: 6px 18px;
+                font-weight: 600;
+                font-size: 10pt;
+                white-space: nowrap;
             }}
             QPushButton:hover {{
-                background-color: {COLORS['primary_container']};
-                border-color: {COLORS['primary']};
+                background: {COLORS['primary_container']};
             }}
         """)
-        export_path_layout.addWidget(self.browse_export_button)
-        options_layout.addLayout(export_path_layout)
-        
-        options_group.setLayout(options_layout)
-        layout.addWidget(options_group)
-        
-        # Buttons
-        button_layout = QHBoxLayout()
-        button_layout.setSpacing(10)
-        
-        # Material Design 3 Outlined Button
-        self.cancel_button = QPushButton("Cancel")
+        exp_h.addWidget(self.browse_export_button)
+        options_layout.addLayout(exp_h)
+        root.addWidget(options_card)
+
+        # ── Action buttons ───────────────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        btn_row.addStretch()
+
+        self.cancel_button = QPushButton("Close")
         self.cancel_button.clicked.connect(self._on_cancel)
+        self.cancel_button.setFixedHeight(38)
+        self.cancel_button.setMinimumWidth(100)
         self.cancel_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: transparent;
-                color: {COLORS['primary']};
-                border: 1px solid {COLORS['outline']};
-                border-radius: 20px;
-                padding: 10px 24px;
+                color: {COLORS['on_surface_variant']};
+                border: 1.5px solid {COLORS['outline_variant']};
+                border-radius: 19px;
+                padding: 8px 24px;
                 font-weight: 500;
                 font-size: 11pt;
             }}
             QPushButton:hover {{
-                background-color: {COLORS['primary_container']};
-                border-color: {COLORS['primary']};
+                background-color: {COLORS['surface_variant']};
+                border-color: {COLORS['outline']};
             }}
         """)
-        button_layout.addWidget(self.cancel_button)
-        
-        # Material Design 3 Filled Button
-        self.export_button = QPushButton("📊 Generate Excel Report")
+        btn_row.addWidget(self.cancel_button)
+
+        self.export_button = QPushButton("📊  Generate Excel Report")
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self._on_export_excel)
+        self.export_button.setFixedHeight(38)
         self.export_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['success_container']};
                 color: {COLORS['success']};
                 border: none;
-                border-radius: 20px;
-                padding: 12px 32px;
-                font-weight: 500;
-                font-size: 12pt;
-                letter-spacing: 0.1px;
+                border-radius: 19px;
+                padding: 8px 24px;
+                font-weight: 600;
+                font-size: 11pt;
             }}
             QPushButton:hover {{
-                background-color: {COLORS['success_container']};
-                box-shadow: 0px 4px 8px {COLORS['shadow']};
+                background-color: #A5D6A7;
             }}
             QPushButton:disabled {{
                 background-color: {COLORS['outline_variant']};
                 color: {COLORS['on_surface_variant']};
             }}
         """)
-        button_layout.addWidget(self.export_button)
+        btn_row.addWidget(self.export_button)
 
-        # Material Design 3 Filled Button
-        self.submit_button = QPushButton("📤 Submit to Google Sheets")
+        self.submit_button = QPushButton("🔗  Submit to Google Sheets")
         self.submit_button.setEnabled(False)
         self.submit_button.clicked.connect(self._on_submit)
+        self.submit_button.setFixedHeight(38)
         self.submit_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['primary']};
                 color: {COLORS['on_primary']};
                 border: none;
-                border-radius: 20px;
-                padding: 12px 32px;
-                font-weight: 500;
-                font-size: 12pt;
-                letter-spacing: 0.1px;
+                border-radius: 19px;
+                padding: 8px 24px;
+                font-weight: 600;
+                font-size: 11pt;
             }}
             QPushButton:hover {{
-                background-color: {COLORS['primary']};
-                box-shadow: 0px 4px 8px {COLORS['shadow']};
+                background-color: #7965AF;
             }}
             QPushButton:disabled {{
                 background-color: {COLORS['outline_variant']};
                 color: {COLORS['on_surface_variant']};
             }}
         """)
-        button_layout.addWidget(self.submit_button)
-        
-        layout.addLayout(button_layout)
-        
-        # Start parsing
+        btn_row.addWidget(self.submit_button)
+
+        root.addLayout(btn_row)
+
         self._start_parsing()
-    
+
+    # ── Progress helpers ───────────────────────────────────────────────────────
+
+    def _set_progress(self, value: int, message: str, done: bool = False):
+        self.status_label.setText(message)
+        self.progress_bar.setValue(value)
+        self._pct_label.setText(f"{value}%")
+        color = COLORS['success'] if done else COLORS['primary']
+        self._pct_label.setStyleSheet(f"font-size: 10pt; font-weight: 600; color: {color};")
+        chunk_color = '#43A047' if done else COLORS['primary']
+        self.progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                border: none; border-radius: 5px;
+                background-color: {COLORS['surface_variant']};
+            }}
+            QProgressBar::chunk {{
+                border-radius: 5px;
+                background-color: {chunk_color};
+            }}
+        """)
+
+    # ── Parsing ────────────────────────────────────────────────────────────────
+
     def _start_parsing(self):
-        """Start parsing process."""
-        logger.info("Starting parsing process")
-        # Get credentials
-        email = self.config.site_username
+        email    = self.config.site_username
         password = self.config.site_password
-        
-        logger.debug(f"Using email: {email}")
-        
+
         if not email or not password:
-            error_msg = "Please configure YouScan.io credentials in Settings."
-            logger.error(error_msg)
-            QMessageBox.critical(
-                self,
-                "Missing Credentials",
-                error_msg
-            )
+            QMessageBox.critical(self, "Missing Credentials",
+                                 "Please configure YouScan.io credentials in Settings.")
             self.reject()
             return
-        
-        # Initialize parser - will be started in thread with async
+
         try:
-            logger.info("Initializing YouScan parser")
-            # Use persistent context to save cookies/session (helps avoid detection)
-            self.parser = YouScanParser(email, password, headless=False, use_persistent_context=True)
-            logger.info("Parser initialized (will start browser in thread)")
-        except Exception as e:
-            error_msg = f"Failed to initialize parser:\n{str(e)}"
-            logger.exception("Initialization error")
-            QMessageBox.critical(
-                self,
-                "Initialization Error",
-                error_msg
+            self.parser = YouScanParser(
+                email, password, headless=False, use_persistent_context=True
             )
+        except Exception as e:
+            QMessageBox.critical(self, "Initialization Error",
+                                 f"Failed to initialize parser:\n{e}")
             self.reject()
             return
-        
-        # Get date range
-        dates = []
-        current = self.date_from
+
+        dates, current = [], self.date_from
         while current <= self.date_to:
             dates.append(current)
             current += timedelta(days=1)
-        
-        # Start parsing thread (browser will be started in thread using async)
+
         self.parsing_thread = ParsingThread(self.parser, dates, self.table_name)
         self.parsing_thread.progress.connect(self._on_progress)
         self.parsing_thread.entry_parsed.connect(self._on_entry_parsed)
         self.parsing_thread.finished.connect(self._on_parsing_finished)
         self.parsing_thread.error.connect(self._on_parsing_error)
         self.parsing_thread.start()
-    
+
     def _on_progress(self, current: int, total: int, message: str):
-        """Update progress."""
-        self.status_label.setText(message)
-        self.progress_bar.setValue(int((current / total) * 100))
-    
+        pct = int((current / total) * 100)
+        self._set_progress(pct, message)
+
     def _on_entry_parsed(self, entry: ParsedEntry):
-        """Add parsed entry to table."""
-        self.entries.append(entry)
-        
-        # Log parsed entry
-        logger.info(f"Parsed entry: {entry.name} - {entry.social_network}")
-        
         row = self.entries_table.rowCount()
         self.entries_table.insertRow(row)
-        
-        # Column 0: Table name
+        self.entries_table.setRowHeight(row, 36)
+
         table_name = entry.table_name or DEFAULT_MEDIA_TABLE
-        self.entries_table.setItem(row, 0, QTableWidgetItem(table_name))
-        
-        # Column 1: Name
-        self.entries_table.setItem(row, 1, QTableWidgetItem(entry.name or ''))
-        # Column 2: Social Network
-        self.entries_table.setItem(row, 2, QTableWidgetItem(entry.social_network or ''))
-        # Column 3: Tag
-        self.entries_table.setItem(row, 3, QTableWidgetItem(entry.tag or ''))
-        # Column 4: Link
-        self.entries_table.setItem(row, 4, QTableWidgetItem(entry.link or ''))
-        # Column 5: Note
-        note_text = entry.note or ''
-        if len(note_text) > NOTE_TRUNCATE_LENGTH:
-            note_text = note_text[:NOTE_TRUNCATE_LENGTH] + '...'
-        self.entries_table.setItem(row, 5, QTableWidgetItem(note_text))
-        # Column 6: Description
-        self.entries_table.setItem(row, 6, QTableWidgetItem(entry.description or ''))
-        
-        # Auto-scroll to bottom
+        social     = entry.social_network or ''
+
+        values = [
+            table_name,
+            entry.name or '',
+            '',  # Social Network — rendered as pill widget below
+            entry.tag or '',
+            entry.link or '',
+            (entry.note or '')[:NOTE_TRUNCATE_LENGTH] + ('...' if len(entry.note or '') > NOTE_TRUNCATE_LENGTH else ''),
+            entry.description or '',
+        ]
+        for col, val in enumerate(values):
+            item = QTableWidgetItem(val)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            if col == 5:
+                item.setToolTip(entry.note or '')
+            if col == 6:
+                item.setToolTip(entry.description or '')
+            self.entries_table.setItem(row, col, item)
+
+        if social:
+            self.entries_table.setCellWidget(row, 2, _make_social_pill(social))
+
         self.entries_table.scrollToBottom()
-    
+        self._entries_badge.set_value(row + 1, "entries")
+        self._table_card.setTitle(f"Parsed Entries · {row + 1} rows")
+
     def _on_parsing_finished(self, entries: List[ParsedEntry], errors: List[Dict]):
-        """Handle parsing completion."""
         self.entries = entries
-        self.errors = errors
-        
-        self.status_label.setText(f"Parsing complete: {len(entries)} entries, {len(errors)} errors")
-        self.progress_bar.setValue(100)
-        
-        # Group entries by table and show table selection
-        entries_by_table = _group_entries_by_table(entries)
-        
-        # Update table selection UI
-        self._update_table_selection(entries_by_table)
-        
-        # Show errors if any
+        self.errors  = errors
+
+        err_count = len(errors)
+        self._set_progress(100, "✅ Parsing complete", done=True)
+
+        if err_count:
+            self._errors_badge._text_color = COLORS['error']
+            self._errors_badge._bg_color   = COLORS['error_container']
+        self._errors_badge.set_value(err_count, "errors")
+
+        self._update_table_selection(_group_entries_by_table(entries))
+
         if errors:
-            error_text = "\n".join([
-                f"Date {err.get('date', 'Unknown')}: {err.get('error', 'Unknown error')}"
-                for err in errors
-            ])
-            self.errors_text.setPlainText(error_text)
-            self.errors_checkbox.setChecked(True)
-            self.errors_text.setVisible(True)
-        
-        # Enable submit button
-        self.submit_button.setEnabled(len(entries) > 0)
-        self.export_button.setEnabled(len(entries) > 0)
+            self.errors_group.setVisible(True)
+            self.errors_text.setPlainText("\n".join(
+                f"Date {e.get('date','?')}: {e.get('error','unknown')}"
+                for e in errors
+            ))
+
+        self.submit_button.setEnabled(bool(entries))
+        self.export_button.setEnabled(bool(entries))
         self.cancel_button.setText("Close")
-    
+
     def _update_table_selection(self, entries_by_table: Dict[str, List[ParsedEntry]]):
-        """Update table selection UI with checkboxes for each table."""
-        # Clear existing checkboxes
-        while self.table_checkboxes_layout.count():
-            child = self.table_checkboxes_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-        self.table_checkboxes.clear()
-        
-        # Create checkboxes for each table
+        while self._pills_layout.count():
+            item = self._pills_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._pill_widgets.clear()
+
         for table_name, table_entries in entries_by_table.items():
-            checkbox = QCheckBox(f"{table_name} ({len(table_entries)} entries)")
-            checkbox.setChecked(True)  # Checked by default
-            checkbox.setStyleSheet(f"""
-                QCheckBox {{
-                    color: {COLORS['on_surface']};
-                    font-weight: 400;
-                    font-size: 10pt;
-                    spacing: 6px;
-                    padding: 2px;
-                }}
-                QCheckBox::indicator {{
-                    width: 16px;
-                    height: 16px;
-                    border: 2px solid {COLORS['outline']};
-                    border-radius: 3px;
-                    background-color: {COLORS['surface']};
-                }}
-                QCheckBox::indicator:checked {{
-                    background-color: {COLORS['primary']};
-                    border-color: {COLORS['primary']};
-                }}
-            """)
-            self.table_checkboxes_layout.addWidget(checkbox)
-            self.table_checkboxes[table_name] = checkbox
-        
-        # Show the table selection UI if there are tables
-        if entries_by_table:
-            self.table_selection_group.setVisible(True)
-        else:
-            self.table_selection_group.setVisible(False)
+            count = len(table_entries)
+            pill = _make_table_pill(table_name, count, checked=True)
+            insert_pos = self._pills_layout.count()
+            self._pills_layout.insertWidget(insert_pos, pill)
+            self._pill_widgets[table_name] = pill
+
+        self._pills_layout.addStretch()
+        self.table_selection_group.setVisible(bool(entries_by_table))
+
+    def _get_selected_tables(self) -> set:
+        selected = set()
+        for table_name, pill in self._pill_widgets.items():
+            cb = pill.property('checkbox')
+            if cb and cb.isChecked():
+                selected.add(table_name)
+        return selected
+
+    # ── Misc handlers ──────────────────────────────────────────────────────────
+
+    def _on_parsing_error(self, message: str, entry):
+        pass
+
+    def _toggle_errors(self, checked: bool):
+        self.errors_text.setVisible(checked)
 
     def _on_browse_export_path(self):
-        """Select export directory (or file path)."""
-        # Prefer selecting a directory; user can still type filename manually.
-        start_dir = self.export_path_input.text().strip() or self.config.export_dir
-        directory = QFileDialog.getExistingDirectory(self, "Select export folder", start_dir)
+        start = self.export_path_input.text().strip() or self.config.export_dir
+        directory = QFileDialog.getExistingDirectory(self, "Select export folder", start)
         if directory:
             self.export_path_input.setText(directory)
             self.config.export_dir = directory
 
     def _on_export_excel(self):
-        """Generate Excel report locally (offline)."""
         if not self.entries:
             QMessageBox.warning(self, "No Data", "No entries to export.")
             return
@@ -872,62 +853,44 @@ class ParserDialog(QDialog):
             QMessageBox.warning(self, "Missing Path", "Please choose an export folder.")
             return
 
-        # Build a default filename if user provided a folder
         safe_table = (self.table_name or "report").replace("/", "_").replace("\\", "_")
-        filename = f"{safe_table}_{self.date_from.isoformat()}_{self.date_to.isoformat()}.xlsx"
-        out_path = Path(base)
+        filename   = f"{safe_table}_{self.date_from.isoformat()}_{self.date_to.isoformat()}.xlsx"
+        out_path   = Path(base)
         if out_path.suffix.lower() != ".xlsx":
             out_path = out_path / filename
 
         self.config.export_dir = str(Path(base))
 
-        # Disable buttons while exporting
-        self.export_button.setEnabled(False)
-        self.submit_button.setEnabled(False)
-        self.cancel_button.setEnabled(False)
-        self.browse_export_button.setEnabled(False)
+        for w in (self.export_button, self.submit_button,
+                  self.cancel_button, self.browse_export_button):
+            w.setEnabled(False)
 
-        self.progress_bar.setValue(0)
-        self.status_label.setText("Generating Excel report...")
+        self._set_progress(0, "Generating Excel report…")
 
         self._excel_thread = ExcelExportThread(list(self.entries), str(out_path))
         self._excel_thread.progress.connect(self._on_progress)
 
-        def on_done(path_str: str):
-            self.progress_bar.setValue(100)
-            self.status_label.setText(f"Excel saved: {path_str}")
+        def on_done(path_str):
+            self._set_progress(100, f"Excel saved: {path_str}", done=True)
             QMessageBox.information(self, "Excel exported", f"Report saved to:\n{path_str}")
-            self.export_button.setEnabled(True)
-            self.submit_button.setEnabled(True)
-            self.cancel_button.setEnabled(True)
-            self.browse_export_button.setEnabled(True)
+            for w in (self.export_button, self.submit_button,
+                      self.cancel_button, self.browse_export_button):
+                w.setEnabled(True)
 
-        def on_fail(err: str):
+        def on_fail(err):
             QMessageBox.critical(self, "Excel export failed", err)
-            self.export_button.setEnabled(True)
-            self.submit_button.setEnabled(True)
-            self.cancel_button.setEnabled(True)
-            self.browse_export_button.setEnabled(True)
+            for w in (self.export_button, self.submit_button,
+                      self.cancel_button, self.browse_export_button):
+                w.setEnabled(True)
 
         self._excel_thread.finished.connect(on_done)
         self._excel_thread.failed.connect(on_fail)
         self._excel_thread.start()
-    
-    def _on_parsing_error(self, message: str, entry: Optional[ParsedEntry]):
-        """Handle parsing error."""
-        # Errors are collected and shown at the end
-        pass
-    
-    def _toggle_errors(self, checked: bool):
-        """Toggle errors visibility."""
-        self.errors_text.setVisible(checked)
-    
+
     def _on_cancel(self):
-        """Handle cancel button."""
         if self.parsing_thread and self.parsing_thread.isRunning():
             reply = QMessageBox.question(
-                self,
-                "Cancel Parsing?",
+                self, "Cancel Parsing?",
                 "Parsing is in progress. Do you want to cancel?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
@@ -941,143 +904,93 @@ class ParserDialog(QDialog):
             if self.parser:
                 self.parser.close()
             self.reject()
-    
+
     def _on_submit(self):
-        """Submit data to Google Sheets."""
         if not self.entries:
             QMessageBox.warning(self, "No Data", "No entries to submit.")
             return
-        
-        # Get Google Sheets credentials
+
         spreadsheet_id = self.config.google_sheets_id
         if not spreadsheet_id:
-            QMessageBox.critical(
-                self,
-                "Missing Configuration",
-                "Please configure Google Sheets ID in Settings."
-            )
+            QMessageBox.critical(self, "Missing Configuration",
+                                 "Please configure Google Sheets ID in Settings.")
             return
-        
-        # Connect to Google Sheets
+
         try:
             sheets_writer = GoogleSheetsWriter(spreadsheet_id)
             sheets_writer.connect()
         except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Connection Error",
-                f"Failed to connect to Google Sheets:\n{str(e)}\n\n"
-                "Please check your credentials and spreadsheet ID."
-            )
+            QMessageBox.critical(self, "Connection Error",
+                                 f"Failed to connect to Google Sheets:\n{e}\n\n"
+                                 "Please check your credentials and spreadsheet ID.")
             return
-        
-        # Get start row
-        start_row = self.row_spinbox.value()
-        if start_row == 0:
-            start_row = None  # Auto
-        
-        # Reset progress bar for writing
-        self.progress_bar.setValue(0)
-        self.status_label.setText("Writing to Google Sheets...")
-        
-        # Write entries with progress callback
+
+        start_row = None
+        self._set_progress(0, "Writing to Google Sheets…")
+
         def update_progress(current, total, message):
-            """Update progress bar for Google Sheets writing."""
-            self.status_label.setText(message)
             if total > 0:
-                self.progress_bar.setValue(int((current / total) * 100))
-        
+                self._set_progress(int((current / total) * 100), message)
+
         try:
-            # Group entries by their automatically detected table_name
             entries_by_table = _group_entries_by_table(self.entries)
-            
-            # Filter by selected tables only
-            selected_tables = {
-                table_name for table_name, checkbox in self.table_checkboxes.items()
-                if checkbox.isChecked()
-            }
-            
+            selected_tables  = self._get_selected_tables()
+
             if not selected_tables:
-                QMessageBox.warning(
-                    self,
-                    "No Tables Selected",
-                    "Please select at least one table to write to."
-                )
+                QMessageBox.warning(self, "No Tables Selected",
+                                    "Please select at least one table to write to.")
                 return
-            
-            # Write entries to each selected table separately
-            total_written = 0
-            total_failed = []
-            results_by_table = {}
-            
+
+            total_written, total_failed = 0, []
+
             for table_name, table_entries in entries_by_table.items():
-                # Skip if table not selected
                 if table_name not in selected_tables:
-                    logger.info(f"Skipping table '{table_name}' (not selected)")
                     continue
-                logger.info(f"Writing {len(table_entries)} entries to table '{table_name}'")
-                
                 result = sheets_writer.write_entries(
-                    table_name, 
-                    table_entries, 
-                    start_row, 
+                    table_name, table_entries, start_row,
                     progress_callback=update_progress
                 )
-                results_by_table[table_name] = result
                 total_written += result['written']
-                # Add table name to failed entries for better error reporting
-                for failed_entry in result['failed']:
-                    failed_entry['table'] = table_name
+                for fe in result['failed']:
+                    fe['table'] = table_name
                 total_failed.extend(result['failed'])
-                
-                # Mark dates as parsed for this table
+
                 if result['success']:
                     for entry in table_entries:
                         if entry.date:
                             self.db_manager.mark_date_parsed(table_name, entry.date)
-            
-            # Show summary
+
             if total_failed:
-                failed_count = len(total_failed)
                 reply = QMessageBox.question(
-                    self,
-                    "Partial Success",
-                    f"Wrote {total_written} entries across {len(entries_by_table)} table(s), "
-                    f"but {failed_count} failed.\n\n"
+                    self, "Partial Success",
+                    f"Wrote {total_written} entries, but {len(total_failed)} failed.\n\n"
                     "Do you want to see error details?",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
                 )
-                
                 if reply == QMessageBox.StandardButton.Yes:
-                    # Show error details
-                    error_details = "\n".join([
-                        f"Table {err.get('table', 'unknown')}, Row {err.get('row', 'unknown')}: {err.get('error', 'unknown error')}"
-                        for err in total_failed[:MAX_ERROR_DISPLAY]
-                    ])
+                    details = "\n".join(
+                        f"Table {e.get('table','?')}, Row {e.get('row','?')}: {e.get('error','?')}"
+                        for e in total_failed[:MAX_ERROR_DISPLAY]
+                    )
                     if len(total_failed) > MAX_ERROR_DISPLAY:
-                        error_details += f"\n... and {len(total_failed) - MAX_ERROR_DISPLAY} more errors"
-                    QMessageBox.warning(self, "Failed Entries", error_details)
+                        details += f"\n… and {len(total_failed) - MAX_ERROR_DISPLAY} more"
+                    QMessageBox.warning(self, "Failed Entries", details)
             else:
-                table_names = ", ".join(entries_by_table.keys())
                 QMessageBox.information(
-                    self,
-                    "Success",
-                    f"Successfully wrote {total_written} entries to {len(entries_by_table)} table(s):\n{table_names}"
+                    self, "Success",
+                    f"Successfully wrote {total_written} entries to "
+                    f"{len(entries_by_table)} table(s):\n"
+                    + ", ".join(entries_by_table.keys())
                 )
-            
+
             self.accept()
-        
+
         except Exception as e:
             logger.exception("Error writing to Google Sheets")
             reply = QMessageBox.question(
-                self,
-                "Error Writing to Sheets",
-                f"Error occurred while writing to Google Sheets:\n{str(e)}\n\n"
-                "Do you want to continue and try again?",
+                self, "Error Writing to Sheets",
+                f"Error:\n{e}\n\nDo you want to continue and try again?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
-            
             if reply == QMessageBox.StandardButton.No:
-                # User chose to stop
                 return
-
