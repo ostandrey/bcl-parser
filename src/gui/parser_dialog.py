@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
     QTableWidget, QTableWidgetItem, QLabel, QProgressBar,
     QMessageBox, QCheckBox, QTextEdit, QLineEdit,
-    QFileDialog, QWidget, QGroupBox, QSizePolicy,
+    QFileDialog, QWidget, QGroupBox, QSizePolicy, QComboBox,
 )
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QFont
@@ -79,6 +79,61 @@ class ExcelExportThread(QThread):
                 progress_callback=lambda c, t, m: self.progress.emit(c, t, m)
             )
             self.finished.emit(str(out))
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class SheetsFetchThread(QThread):
+    """Fetches sheet names in background so pills can show warnings before Submit."""
+    finished = pyqtSignal(list)   # list of sheet name strings
+    failed   = pyqtSignal()       # silent fail — no crash, just no warning
+
+    def __init__(self, spreadsheet_id: str):
+        super().__init__()
+        self._spreadsheet_id = spreadsheet_id
+
+    def run(self):
+        try:
+            writer = GoogleSheetsWriter(self._spreadsheet_id)
+            writer.connect()
+            self.finished.emit(writer.get_sheet_names())
+        except Exception:
+            self.failed.emit()
+
+
+class SheetsWriteThread(QThread):
+    progress = pyqtSignal(int, int, str)
+    finished = pyqtSignal(dict)   # {table: result_dict}
+    failed   = pyqtSignal(str)
+
+    def __init__(
+        self,
+        writer: 'GoogleSheetsWriter',
+        entries_by_table: Dict[str, list],
+        selected_tables: set,
+        remapping: Dict[str, str],
+    ):
+        super().__init__()
+        self._writer          = writer
+        self._entries_by_table = entries_by_table
+        self._selected_tables  = selected_tables
+        self._remapping        = remapping
+
+    def run(self):
+        try:
+            results: Dict[str, dict] = {}
+            for orig_name, table_entries in self._entries_by_table.items():
+                if orig_name not in self._selected_tables:
+                    continue
+                effective_name = self._remapping.get(orig_name, orig_name)
+                result = self._writer.write_entries(
+                    effective_name, table_entries,
+                    progress_callback=lambda c, t, m: self.progress.emit(c, t, m),
+                )
+                result['effective_name'] = effective_name
+                result['orig_name']      = orig_name
+                results[orig_name]       = result
+            self.finished.emit(results)
         except Exception as e:
             self.failed.emit(str(e))
 
@@ -218,16 +273,31 @@ def _make_social_pill(text: str) -> QWidget:
     container.setStyleSheet("background: transparent;")
     return container
 
-def _make_table_pill(table_name: str, count: int, checked: bool = True) -> QWidget:
-    """Pill с чекбоксом, названием таблицы и badge-числом."""
+def _make_table_pill(
+    table_name: str,
+    count: int,
+    checked: bool = True,
+    missing: bool = False,
+    available_sheets: Optional[List[str]] = None,
+) -> QWidget:
+    """Pill with checkbox, table name badge, and optional missing-table warning + remap dropdown."""
+    is_warning = missing
+
+    bg_color     = COLORS['warning_container'] if is_warning else COLORS['primary_container']
+    border_color = COLORS['warning']           if is_warning else COLORS['primary']
+    text_color   = COLORS['warning']           if is_warning else COLORS['primary']
+    badge_color  = COLORS['warning']           if is_warning else COLORS['primary']
+    cb_border    = COLORS['warning']           if is_warning else COLORS['primary']
+    cb_checked   = COLORS['warning']           if is_warning else COLORS['primary']
+    cb_checked_h = '#E65100'                   if is_warning else '#7965AF'
+
     container = QWidget()
-    container.setFixedHeight(36)
     container.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
     container.setObjectName("pill_container")
     container.setStyleSheet(f"""
         QWidget#pill_container {{
-            background-color: {COLORS['primary_container']};
-            border: 1.5px solid {COLORS['primary']};
+            background-color: {bg_color};
+            border: 1.5px solid {border_color};
             border-radius: 18px;
         }}
     """)
@@ -246,42 +316,82 @@ def _make_table_pill(table_name: str, count: int, checked: bool = True) -> QWidg
         QCheckBox::indicator {{
             width: 18px;
             height: 18px;
-            border: 2px solid {COLORS['primary']};
+            border: 2px solid {cb_border};
             border-radius: 4px;
             background: {COLORS['surface']};
         }}
         QCheckBox::indicator:hover {{
-            border-color: {COLORS['primary']};
-            background: {COLORS['primary_container']};
+            border-color: {cb_border};
+            background: {bg_color};
         }}
         QCheckBox::indicator:checked {{
-            background-color: {COLORS['primary']};
-            border-color: {COLORS['primary']};
+            background-color: {cb_checked};
+            border-color: {cb_checked};
             image: url({(Path(__file__).parent / 'checkmark.svg').as_posix()});
         }}
         QCheckBox::indicator:checked:hover {{
-            background-color: #7965AF;
-            border-color: #7965AF;
+            background-color: {cb_checked_h};
+            border-color: {cb_checked_h};
         }}
     """)
 
-    name_lbl = QLabel(table_name)
-    name_lbl.setStyleSheet(f"""
-        QLabel {{
-            color: {COLORS['primary']};
-            font-weight: 600;
-            font-size: 10pt;
-            background: transparent;
-            border: none;
-        }}
-    """)
+    layout.addWidget(cb)
+
+    if is_warning:
+        warn_lbl = QLabel("⚠")
+        warn_lbl.setStyleSheet(f"""
+            QLabel {{
+                color: {COLORS['warning']};
+                font-size: 11pt;
+                font-weight: 700;
+                background: transparent;
+                border: none;
+            }}
+        """)
+        layout.addWidget(warn_lbl)
+
+        # Remap dropdown: choose existing table instead
+        combo = QComboBox()
+        combo.setFixedHeight(26)
+        sheets = available_sheets or []
+        combo.addItems(sheets)
+        # Pre-select the closest existing sheet (same type, latest year available)
+        prefix = table_name.rsplit(' ', 1)[0] if ' ' in table_name else table_name
+        candidates = [s for s in sheets if s.startswith(prefix)]
+        if candidates:
+            combo.setCurrentText(candidates[-1])  # last = highest year available
+        combo.setStyleSheet(f"""
+            QComboBox {{
+                background: white;
+                border: 1px solid {COLORS['warning']};
+                border-radius: 6px;
+                padding: 0 6px;
+                font-size: 9pt;
+                color: {COLORS['on_surface']};
+            }}
+            QComboBox::drop-down {{ border: none; }}
+        """)
+        layout.addWidget(combo)
+        container.setProperty('remap_combo', combo)
+    else:
+        name_lbl = QLabel(table_name)
+        name_lbl.setStyleSheet(f"""
+            QLabel {{
+                color: {text_color};
+                font-weight: 600;
+                font-size: 10pt;
+                background: transparent;
+                border: none;
+            }}
+        """)
+        layout.addWidget(name_lbl)
 
     badge = QLabel(str(count))
     badge.setFixedSize(22, 22)
     badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
     badge.setStyleSheet(f"""
         QLabel {{
-            background-color: {COLORS['primary']};
+            background-color: {badge_color};
             color: white;
             border-radius: 11px;
             font-size: 9pt;
@@ -289,12 +399,15 @@ def _make_table_pill(table_name: str, count: int, checked: bool = True) -> QWidg
             border: none;
         }}
     """)
-
-    layout.addWidget(cb)
-    layout.addWidget(name_lbl)
     layout.addWidget(badge)
 
-    container.setProperty('checkbox', cb)
+    # Adjust height: fixed for normal, minimum for warning (has combo)
+    if is_warning:
+        container.setMinimumHeight(36)
+    else:
+        container.setFixedHeight(36)
+
+    container.setProperty('checkbox',   cb)
     container.setProperty('table_name', table_name)
     return container
 
@@ -326,6 +439,7 @@ class ParserDialog(QDialog):
         self.parser:  Optional[YouScanParser] = None
         self.parsing_thread: Optional[ParsingThread] = None
         self._pill_widgets: Dict[str, QWidget] = {}
+        self._available_sheets: List[str]     = []   # real sheets from Google Sheets
 
         self.setWindowTitle("Parsing Data")
         self.setMinimumSize(1280, 720)
@@ -492,11 +606,33 @@ class ParserDialog(QDialog):
 
         # ── Tables to Write card ─────────────────────────────────────────────
         self.table_selection_group = _SectionCard("Tables to Write", accent=COLORS['primary'])
+        _card_vbox = QVBoxLayout()
+        _card_vbox.setContentsMargins(14, 18, 14, 14)
+        _card_vbox.setSpacing(6)
+
+        # Warning banner (hidden until missing tables detected)
+        self._missing_tables_warning = QLabel()
+        self._missing_tables_warning.setWordWrap(True)
+        self._missing_tables_warning.setVisible(False)
+        self._missing_tables_warning.setStyleSheet(f"""
+            QLabel {{
+                background-color: {COLORS['warning_container']};
+                color: {COLORS['warning']};
+                border: 1px solid {COLORS['warning']};
+                border-radius: 6px;
+                padding: 6px 10px;
+                font-size: 9pt;
+                font-weight: 600;
+            }}
+        """)
+        _card_vbox.addWidget(self._missing_tables_warning)
+
         self._pills_layout = QHBoxLayout()
-        self._pills_layout.setContentsMargins(14, 18, 14, 14)
         self._pills_layout.setSpacing(10)
         self._pills_layout.addStretch()
-        self.table_selection_group.setLayout(self._pills_layout)
+        _card_vbox.addLayout(self._pills_layout)
+
+        self.table_selection_group.setLayout(_card_vbox)
         self.table_selection_group.setVisible(False)
         root.addWidget(self.table_selection_group)
 
@@ -803,24 +939,55 @@ class ParserDialog(QDialog):
         self.export_button.setEnabled(bool(entries))
         self.cancel_button.setText("Close")
 
+        # Fetch real sheet names in background so pills show yellow warnings immediately
+        spreadsheet_id = self.config.google_sheets_id
+        if spreadsheet_id and entries:
+            self._fetch_thread = SheetsFetchThread(spreadsheet_id)
+            self._fetch_thread.finished.connect(self._on_sheets_fetched)
+            self._fetch_thread.start()
+
     def _update_table_selection(self, entries_by_table: Dict[str, List[ParsedEntry]]):
+        # Clear pills
         while self._pills_layout.count():
             item = self._pills_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
         self._pill_widgets.clear()
 
+        available = self._available_sheets
+        missing_tables = []
+
         for table_name, table_entries in entries_by_table.items():
             count = len(table_entries)
-            pill = _make_table_pill(table_name, count, checked=True)
+            is_missing = bool(available) and table_name not in available
+            if is_missing:
+                missing_tables.append(table_name)
+            pill = _make_table_pill(
+                table_name, count, checked=True,
+                missing=is_missing,
+                available_sheets=available if is_missing else None,
+            )
             insert_pos = self._pills_layout.count()
             self._pills_layout.insertWidget(insert_pos, pill)
             self._pill_widgets[table_name] = pill
 
         self._pills_layout.addStretch()
+
+        # Show/update warning banner
+        if missing_tables:
+            names = ', '.join(f'"{t}"' for t in missing_tables)
+            self._missing_tables_warning.setText(
+                f"⚠  Таблиці {names} не знайдено у Google Sheets.\n"
+                f"Оберіть існуючу таблицю у випадаючому списку — або створіть нову через «Create Table»."
+            )
+            self._missing_tables_warning.setVisible(True)
+        else:
+            self._missing_tables_warning.setVisible(False)
+
         self.table_selection_group.setVisible(bool(entries_by_table))
 
     def _get_selected_tables(self) -> set:
+        """Return set of original table names that are checked."""
         selected = set()
         for table_name, pill in self._pill_widgets.items():
             cb = pill.property('checkbox')
@@ -828,7 +995,22 @@ class ParserDialog(QDialog):
                 selected.add(table_name)
         return selected
 
+    def _get_table_remapping(self) -> Dict[str, str]:
+        """Return mapping of original_table_name → effective_table_name (after remap dropdown)."""
+        remapping: Dict[str, str] = {}
+        for table_name, pill in self._pill_widgets.items():
+            combo = pill.property('remap_combo')
+            if combo and combo.currentText():
+                remapping[table_name] = combo.currentText()
+            else:
+                remapping[table_name] = table_name
+        return remapping
+
     # ── Misc handlers ──────────────────────────────────────────────────────────
+
+    def _on_sheets_fetched(self, sheet_names: list):
+        self._available_sheets = sheet_names
+        self._update_table_selection(_group_entries_by_table(self.entries))
 
     def _on_parsing_error(self, message: str, entry):
         pass
@@ -925,72 +1107,104 @@ class ParserDialog(QDialog):
                                  "Please check your credentials and spreadsheet ID.")
             return
 
-        start_row = None
+        try:
+            self._available_sheets = sheets_writer.get_sheet_names()
+            self._update_table_selection(_group_entries_by_table(self.entries))
+        except Exception as _e:
+            logger.warning(f"Could not fetch sheet names: {_e}")
+
+        entries_by_table = _group_entries_by_table(self.entries)
+        selected_tables  = self._get_selected_tables()
+        remapping        = self._get_table_remapping()
+
+        if not selected_tables:
+            QMessageBox.warning(self, "No Tables Selected",
+                                "Please select at least one table to write to.")
+            return
+
+        existing = set(self._available_sheets)
+        truly_missing = [
+            remapping.get(t, t) for t in selected_tables
+            if remapping.get(t, t) not in existing
+        ]
+        if truly_missing:
+            names = '\n'.join(f'  • {t}' for t in truly_missing)
+            reply = QMessageBox.question(
+                self, "Таблиці не існують",
+                f"Наступні таблиці не знайдено у Google Sheets:\n{names}\n\n"
+                f"Якщо продовжити — вони будуть створені автоматично.\n"
+                f"Натисніть «Ні», щоб скасувати і обрати іншу таблицю.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                self._set_progress(0, "")
+                return
+
+        for w in (self.submit_button, self.export_button,
+                  self.cancel_button, self.browse_export_button):
+            w.setEnabled(False)
         self._set_progress(0, "Writing to Google Sheets…")
 
-        def update_progress(current, total, message):
-            if total > 0:
-                self._set_progress(int((current / total) * 100), message)
+        self._sheets_thread = SheetsWriteThread(
+            sheets_writer, entries_by_table, selected_tables, remapping
+        )
+        self._sheets_thread.progress.connect(
+            lambda c, t, m: self._set_progress(int((c / t) * 100) if t else 0, m)
+        )
+        self._sheets_thread.finished.connect(self._on_sheets_write_done)
+        self._sheets_thread.failed.connect(self._on_sheets_write_failed)
+        self._sheets_thread.start()
 
-        try:
-            entries_by_table = _group_entries_by_table(self.entries)
-            selected_tables  = self._get_selected_tables()
+    def _on_sheets_write_done(self, results: Dict):
+        for w in (self.submit_button, self.export_button,
+                  self.cancel_button, self.browse_export_button):
+            w.setEnabled(True)
 
-            if not selected_tables:
-                QMessageBox.warning(self, "No Tables Selected",
-                                    "Please select at least one table to write to.")
-                return
+        total_written, total_failed = 0, []
+        for orig_name, result in results.items():
+            effective_name = result.get('effective_name', orig_name)
+            total_written += result.get('written', 0)
+            for fe in result.get('failed', []):
+                fe['table'] = effective_name
+                total_failed.append(fe)
+            if result.get('success'):
+                table_entries = _group_entries_by_table(self.entries).get(orig_name, [])
+                for entry in table_entries:
+                    if entry.date:
+                        self.db_manager.mark_date_parsed(effective_name, entry.date)
 
-            total_written, total_failed = 0, []
-
-            for table_name, table_entries in entries_by_table.items():
-                if table_name not in selected_tables:
-                    continue
-                result = sheets_writer.write_entries(
-                    table_name, table_entries, start_row,
-                    progress_callback=update_progress
-                )
-                total_written += result['written']
-                for fe in result['failed']:
-                    fe['table'] = table_name
-                total_failed.extend(result['failed'])
-
-                if result['success']:
-                    for entry in table_entries:
-                        if entry.date:
-                            self.db_manager.mark_date_parsed(table_name, entry.date)
-
-            if total_failed:
-                reply = QMessageBox.question(
-                    self, "Partial Success",
-                    f"Wrote {total_written} entries, but {len(total_failed)} failed.\n\n"
-                    "Do you want to see error details?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                )
-                if reply == QMessageBox.StandardButton.Yes:
-                    details = "\n".join(
-                        f"Table {e.get('table','?')}, Row {e.get('row','?')}: {e.get('error','?')}"
-                        for e in total_failed[:MAX_ERROR_DISPLAY]
-                    )
-                    if len(total_failed) > MAX_ERROR_DISPLAY:
-                        details += f"\n… and {len(total_failed) - MAX_ERROR_DISPLAY} more"
-                    QMessageBox.warning(self, "Failed Entries", details)
-            else:
-                QMessageBox.information(
-                    self, "Success",
-                    f"Successfully wrote {total_written} entries to "
-                    f"{len(entries_by_table)} table(s):\n"
-                    + ", ".join(entries_by_table.keys())
-                )
-
-            self.accept()
-
-        except Exception as e:
-            logger.exception("Error writing to Google Sheets")
+        if total_failed:
+            self._set_progress(total_written, total_written + len(total_failed), "Partial success")
             reply = QMessageBox.question(
-                self, "Error Writing to Sheets",
-                f"Error:\n{e}\n\nDo you want to continue and try again?",
+                self, "Partial Success",
+                f"Wrote {total_written} entries, but {len(total_failed)} failed.\n\n"
+                "Do you want to see error details?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
-            if reply == QMessageBox.StandardButton.No:
-                return
+            if reply == QMessageBox.StandardButton.Yes:
+                details = "\n".join(
+                    f"Table {e.get('table','?')}, Row {e.get('row','?')}: {e.get('error','?')}"
+                    for e in total_failed[:MAX_ERROR_DISPLAY]
+                )
+                if len(total_failed) > MAX_ERROR_DISPLAY:
+                    details += f"\n… and {len(total_failed) - MAX_ERROR_DISPLAY} more"
+                QMessageBox.warning(self, "Failed Entries", details)
+        else:
+            self._set_progress(100, f"✅ Written {total_written} entries", done=True)
+            QMessageBox.information(
+                self, "Success",
+                f"Successfully wrote {total_written} entries to "
+                f"{len(results)} table(s):\n"
+                + ", ".join(r.get('effective_name', k) for k, r in results.items())
+            )
+            self.accept()
+
+    def _on_sheets_write_failed(self, error: str):
+        for w in (self.submit_button, self.export_button,
+                  self.cancel_button, self.browse_export_button):
+            w.setEnabled(True)
+        self._set_progress(0, "")
+        logger.exception("Error writing to Google Sheets")
+        QMessageBox.critical(self, "Error Writing to Sheets",
+                             f"Failed to write to Google Sheets:\n{error}")

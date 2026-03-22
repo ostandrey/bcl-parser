@@ -1,6 +1,5 @@
 {
-    "python.defaultInterpreterPath": "${env:CONDA_PREFIX}/python.exe",
-    "python.terminal.activateEnvironment": true,
-    "python.condaPath": "${env:CONDA_PREFIX}/../../Scripts/conda.exe"
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+    "python.terminal.activateEnvironment": true
 }
 

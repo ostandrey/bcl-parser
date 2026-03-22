@@ -35,59 +35,85 @@ class GoogleSheetsWriter:
         """Connect to Google Sheets."""
         try:
             from pathlib import Path
-            creds_path = Path(__file__).parent / 'credentials.json'
-            service_account_path = Path(__file__).parent / 'service_account.json'
-            token_path = Path(__file__).parent / 'token.json'
-            
+
+            # Paths in the package directory (legacy / manual setup)
+            sheets_dir            = Path(__file__).parent
+            service_account_path  = sheets_dir / 'service_account.json'
+            token_path            = sheets_dir / 'token.json'
+            creds_path            = sheets_dir / 'credentials.json'
+
+            # Standard gspread paths (~/.config/gspread/)
+            gspread_dir           = Path.home() / '.config' / 'gspread'
+            gspread_token         = gspread_dir / 'authorized_user.json'
+            gspread_creds         = gspread_dir / 'credentials.json'
+
             creds = None
-            
-            # Option 1: Try Service Account (simplest - no OAuth needed)
-            if service_account_path.exists():
-                creds = service_account.Credentials.from_service_account_file(
-                    str(service_account_path),
-                    scopes=self.SCOPES
-                )
-                self.client = gspread.authorize(creds)
-                self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
-                return
-            
-            # Option 2: Try OAuth with existing token
-            if token_path.exists():
-                creds = Credentials.from_authorized_user_file(str(token_path), self.SCOPES)
-            
-            # Option 3: Try OAuth flow if credentials.json exists
-            if not creds or not creds.valid:
-                if creds and creds.expired and creds.refresh_token:
-                    creds.refresh(Request())
-                elif creds_path.exists():
-                    flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), self.SCOPES)
-                    creds = flow.run_local_server(port=0)
-                else:
-                    raise ValueError(
-                        "No authentication method found.\n\n"
-                        "Please use one of these options:\n"
-                        "1. Service Account (recommended - no OAuth):\n"
-                        "   - Create service account in Google Cloud Console\n"
-                        "   - Download JSON key\n"
-                        "   - Save as 'src/sheets/service_account.json'\n"
-                        "   - Share your Google Sheet with the service account email\n\n"
-                        "2. OAuth:\n"
-                        "   - Set up OAuth credentials (credentials.json)\n"
-                        "   - See TESTING_GUIDE.md for instructions"
+
+            # --- Option 1: Service Account JSON ----------------------------------
+            for sa_path in (service_account_path, gspread_dir / 'service_account.json'):
+                if sa_path.exists():
+                    creds = service_account.Credentials.from_service_account_file(
+                        str(sa_path), scopes=self.SCOPES
                     )
-            
-            # Save token for future use (OAuth only)
-            if token_path.parent.exists() and not isinstance(creds, service_account.Credentials):
-                with open(token_path, 'w') as token:
-                    token.write(creds.to_json())
-            
-            # Create gspread client
-            self.client = gspread.authorize(creds)
-            self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
-            
+                    self.client = gspread.authorize(creds)
+                    self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
+                    return
+
+            # --- Option 2: Existing OAuth token (token.json or gspread default) --
+            for tp in (token_path, gspread_token):
+                if tp.exists():
+                    try:
+                        creds = Credentials.from_authorized_user_file(str(tp), self.SCOPES)
+                        if creds and creds.expired and creds.refresh_token:
+                            creds.refresh(Request())
+                            with open(tp, 'w') as f:
+                                f.write(creds.to_json())
+                        if creds and creds.valid:
+                            self.client = gspread.authorize(creds)
+                            self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
+                            return
+                    except Exception:
+                        pass  # try next option
+
+            # --- Option 3: gspread.oauth() – handles the full OAuth flow ---------
+            for cp in (creds_path, gspread_creds):
+                if cp.exists():
+                    try:
+                        # gspread.oauth opens a browser for consent if needed,
+                        # then caches the token at gspread_token automatically.
+                        gspread_dir.mkdir(parents=True, exist_ok=True)
+                        self.client = gspread.oauth(
+                            credentials_filename=str(cp),
+                            authorized_user_filename=str(gspread_token),
+                        )
+                        self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
+                        return
+                    except Exception:
+                        pass  # try next option
+
+            # --- Nothing worked --------------------------------------------------
+            raise ValueError(
+                "Не знайдено жодного методу авторизації Google.\n\n"
+                "Варіант 1 – Service Account (рекомендовано, без браузера):\n"
+                "  • Створіть Service Account у Google Cloud Console\n"
+                "  • Завантажте JSON-ключ\n"
+                "  • Збережіть як  src/sheets/service_account.json\n"
+                "  • Поділіться таблицею з email сервісного акаунта\n\n"
+                "Варіант 2 – OAuth (потрібен браузер при першому запуску):\n"
+                "  • Завантажте credentials.json з Google Cloud Console\n"
+                "  • Збережіть як  ~/.config/gspread/credentials.json\n"
+                "     або  src/sheets/credentials.json"
+            )
+
         except Exception as e:
             raise ConnectionError(f"Failed to connect to Google Sheets: {e}")
     
+    def get_sheet_names(self) -> list:
+        """Return list of all worksheet titles in the spreadsheet."""
+        if not self.spreadsheet:
+            self.connect()
+        return [ws.title for ws in self.spreadsheet.worksheets()]
+
     def get_sheet(self, sheet_name: str, create_if_missing: bool = True):
         """
         Get a specific sheet by name.
@@ -150,16 +176,14 @@ class GoogleSheetsWriter:
             raise
     
     def find_last_row(self, sheet, start_row: int = 2) -> int:
-        """Find the last non-empty row in a sheet."""
+        """Find the last non-empty row in a sheet (checks all columns)."""
         try:
-            # Get all values in the first column
-            col_values = sheet.col_values(1)
-            # Find last non-empty row
-            for i in range(len(col_values), start_row - 1, -1):
-                if col_values[i - 1]:
-                    return i + 1
+            all_values = sheet.get_all_values()
+            for i in range(len(all_values) - 1, start_row - 2, -1):
+                if any(cell.strip() for cell in all_values[i]):
+                    return i + 2  # +1 for 1-based index, +1 for next empty row
             return start_row
-        except:
+        except Exception:
             return start_row
     
     def write_entries(
@@ -312,51 +336,39 @@ class GoogleSheetsWriter:
             'failed': failed
         }
     
+    _MONTH_NAMES_UK = [
+        '', 'Січень', 'Лютий', 'Березень', 'Квітень',
+        'Травень', 'Червень', 'Липень', 'Серпень',
+        'Вересень', 'Жовтень', 'Листопад', 'Грудень',
+    ]
+
     def _entry_to_row_data(self, entry: ParsedEntry, sheet_name: str, column_mapping: Dict) -> Dict[str, str]:
         """Convert ParsedEntry to row data dictionary."""
-        row_data = {}
-        
-        if sheet_name == 'Соцмережі 2025':
-            # Extract month from date
-            month_name = ''
-            if entry.date:
-                month_names_uk = [
-                    '', 'Січень', 'Лютий', 'Березень', 'Квітень',
-                    'Травень', 'Червень', 'Липень', 'Серпень',
-                    'Вересень', 'Жовтень', 'Листопад', 'Грудень'
-                ]
-                month_name = month_names_uk[entry.date.month] if entry.date.month < len(month_names_uk) else ''
-            
-            row_data[column_mapping.get('Місяць', 'A')] = month_name
-            row_data[column_mapping.get('Назва', 'B')] = entry.name or ''
-            row_data[column_mapping.get('Хто це', 'C')] = entry.description or ''
-            row_data[column_mapping.get('Тема', 'D')] = entry.tag or ''
-            row_data[column_mapping.get('Соцмережа', 'E')] = entry.social_network or ''
-            row_data[column_mapping.get('Лінк', 'F')] = entry.link or ''
-            row_data[column_mapping.get('Примітки', 'G')] = entry.note or ''
-        
-        elif sheet_name == 'ЗМІ 2025':
-            # Extract month from date
-            month_name = ''
-            if entry.date:
-                month_names_uk = [
-                    '', 'Січень', 'Лютий', 'Березень', 'Квітень',
-                    'Травень', 'Червень', 'Липень', 'Серпень',
-                    'Вересень', 'Жовтень', 'Листопад', 'Грудень'
-                ]
-                month_name = month_names_uk[entry.date.month] if entry.date.month < len(month_names_uk) else ''
-            
-            row_data[column_mapping.get('Місяць', 'A')] = month_name
-            row_data[column_mapping.get('Медіа', 'B')] = entry.name or ''
-            row_data[column_mapping.get('Тема', 'C')] = entry.tag or ''
-            row_data[column_mapping.get('Лінк', 'D')] = entry.link or ''
-            row_data[column_mapping.get('Примітки', 'E')] = entry.note or ''
-        
-        elif sheet_name == 'Вакансії':
-            # Define when needed
-            pass
-        
-        return row_data
+        month_name = ''
+        if entry.date and 0 < entry.date.month < len(self._MONTH_NAMES_UK):
+            month_name = self._MONTH_NAMES_UK[entry.date.month]
+
+        if 'Соцмережі' in sheet_name:
+            return {
+                column_mapping.get('Місяць',    'A'): month_name,
+                column_mapping.get('Назва',      'B'): entry.name or '',
+                column_mapping.get('Хто це',     'C'): entry.description or '',
+                column_mapping.get('Тема',       'D'): entry.tag or '',
+                column_mapping.get('Соцмережа',  'E'): entry.social_network or '',
+                column_mapping.get('Лінк',       'F'): entry.link or '',
+                column_mapping.get('Примітки',   'G'): entry.note or '',
+            }
+
+        if 'ЗМІ' in sheet_name:
+            return {
+                column_mapping.get('Місяць',   'A'): month_name,
+                column_mapping.get('Медіа',    'B'): entry.name or '',
+                column_mapping.get('Тема',     'C'): entry.tag or '',
+                column_mapping.get('Лінк',     'D'): entry.link or '',
+                column_mapping.get('Примітки', 'E'): entry.note or '',
+            }
+
+        return {}
     
     def get_dropdown_options(self, sheet_name: str, column: str) -> List[str]:
         """Get dropdown options from a column (for validation)."""
@@ -373,8 +385,7 @@ class GoogleSheetsWriter:
         """Validate entry against sheet dropdowns. Returns list of errors."""
         errors = []
         
-        if sheet_name == 'Соцмережі 2025':
-            # Validate social network
+        if 'Соцмережі' in sheet_name:
             if entry.social_network and entry.social_network not in SOCIAL_NETWORK_OPTIONS:
                 errors.append(f"Social network '{entry.social_network}' not in dropdown options")
         
