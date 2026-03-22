@@ -8,33 +8,9 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from ..sheets.google_sheets import GoogleSheetsWriter
 from ..config import Config, TABLE_NAME_PATTERNS
+from .theme import COLORS, COMBO_STYLE, INPUT_STYLE, GROUP_BOX_STYLE
 
 logger = logging.getLogger(__name__)
-
-# Material Design 3 color scheme (shared with other dialogs)
-COLORS = {
-    'primary': '#6750A4',  # M3 Primary Purple
-    'primary_container': '#EADDFF',
-    'on_primary': '#FFFFFF',
-    'secondary': '#625B71',
-    'secondary_container': '#E8DEF8',
-    'tertiary': '#7D5260',
-    'surface': '#FFFBFE',  # M3 Surface
-    'surface_variant': '#E7E0EC',
-    'background': '#FEF7FF',  # M3 Background
-    'on_surface': '#1C1B1F',
-    'on_surface_variant': '#49454F',
-    'outline': '#79747E',
-    'outline_variant': '#CAC4D0',
-    'shadow': 'rgba(0, 0, 0, 0.15)',
-    'scrim': 'rgba(0, 0, 0, 0.32)',
-    'error': '#BA1A1A',
-    'error_container': '#F9DEDC',
-    'success': '#1B5E20',
-    'success_container': '#C8E6C9',
-    'warning': '#F57C00',
-    'warning_container': '#FFE0B2',
-}
 
 
 class CreateTableDialog(QDialog):
@@ -91,23 +67,7 @@ class CreateTableDialog(QDialog):
         
         # Table configuration group
         config_group = QGroupBox("Table Configuration")
-        config_group.setStyleSheet(f"""
-            QGroupBox {{
-                font-weight: 600;
-                font-size: 12pt;
-                border: 1px solid {COLORS['outline_variant']};
-                border-radius: 6px;
-                margin-top: 8px;
-                padding-top: 12px;
-                background-color: {COLORS['surface']};
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 8px;
-                padding: 0 4px;
-                color: {COLORS['on_surface']};
-            }}
-        """)
+        config_group.setStyleSheet(GROUP_BOX_STYLE)
         config_layout = QVBoxLayout()
         config_layout.setSpacing(6)
         config_layout.setContentsMargins(10, 8, 10, 10)
@@ -122,42 +82,7 @@ class CreateTableDialog(QDialog):
         self.type_combo = QComboBox()
         self.type_combo.addItems(["Social Network", "Media", "Custom"])
         self.type_combo.currentTextChanged.connect(self._on_type_changed)
-        self.type_combo.setStyleSheet(f"""
-            QComboBox {{
-                padding: 6px 8px;
-                border: 1px solid {COLORS['outline_variant']};
-                border-radius: 4px;
-                background-color: {COLORS['surface']};
-                font-size: 11pt;
-                color: {COLORS['on_surface']};
-                min-height: 24px;
-            }}
-            QComboBox:hover {{
-                background-color: {COLORS['surface_variant']};
-                border-bottom-color: {COLORS['on_surface']};
-            }}
-            QComboBox:focus {{
-                background-color: {COLORS['surface_variant']};
-                border: 2px solid {COLORS['primary']};
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 32px;
-                background-color: transparent;
-            }}
-            QComboBox::drop-down:hover {{
-                background-color: {COLORS['primary_container']};
-                border-radius: 12px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {COLORS['surface']};
-                border: 1px solid {COLORS['outline']};
-                border-radius: 6px;
-                selection-background-color: {COLORS['primary_container']};
-                selection-color: {COLORS['on_surface']};
-                padding: 4px;
-            }}
-        """)
+        self.type_combo.setStyleSheet(COMBO_STYLE)
         type_layout.addWidget(self.type_combo)
         type_layout.addStretch()
         config_layout.addLayout(type_layout)
@@ -177,42 +102,7 @@ class CreateTableDialog(QDialog):
             self.year_combo.addItem(str(year))
         self.year_combo.setCurrentText(str(current_year))
         self.year_combo.currentTextChanged.connect(self._on_year_changed)
-        self.year_combo.setStyleSheet(f"""
-            QComboBox {{
-                padding: 6px 8px;
-                border: 1px solid {COLORS['outline_variant']};
-                border-radius: 4px;
-                background-color: {COLORS['surface']};
-                font-size: 11pt;
-                color: {COLORS['on_surface']};
-                min-height: 24px;
-            }}
-            QComboBox:hover {{
-                background-color: {COLORS['surface_variant']};
-                border-bottom-color: {COLORS['on_surface']};
-            }}
-            QComboBox:focus {{
-                background-color: {COLORS['surface_variant']};
-                border: 2px solid {COLORS['primary']};
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 32px;
-                background-color: transparent;
-            }}
-            QComboBox::drop-down:hover {{
-                background-color: {COLORS['primary_container']};
-                border-radius: 12px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {COLORS['surface']};
-                border: 1px solid {COLORS['outline']};
-                border-radius: 6px;
-                selection-background-color: {COLORS['primary_container']};
-                selection-color: {COLORS['on_surface']};
-                padding: 4px;
-            }}
-        """)
+        self.year_combo.setStyleSheet(COMBO_STYLE)
         year_layout.addWidget(self.year_combo)
         year_layout.addStretch()
         config_layout.addLayout(year_layout)
@@ -227,24 +117,7 @@ class CreateTableDialog(QDialog):
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("Enter table name or use template")
         self.name_input.textChanged.connect(self._on_name_changed)
-        self.name_input.setStyleSheet(f"""
-            QLineEdit {{
-                padding: 6px 8px;
-                border: 1px solid {COLORS['outline_variant']};
-                border-radius: 4px;
-                background-color: {COLORS['surface']};
-                font-size: 11pt;
-                color: {COLORS['on_surface']};
-            }}
-            QLineEdit:hover {{
-                background-color: {COLORS['surface_variant']};
-                border-bottom-color: {COLORS['on_surface']};
-            }}
-            QLineEdit:focus {{
-                background-color: {COLORS['surface_variant']};
-                border: 2px solid {COLORS['primary']};
-            }}
-        """)
+        self.name_input.setStyleSheet(INPUT_STYLE)
         name_layout.addWidget(self.name_input)
         config_layout.addLayout(name_layout)
         

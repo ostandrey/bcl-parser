@@ -13,19 +13,21 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QRect
 from PyQt6.QtGui import QAction, QPainter, QColor, QPen, QBrush
 
-# ── Palette ────────────────────────────────────────────────────────────────────
+from .theme import COLORS as _T
+
+# ── Palette (local alias for backwards compatibility within this module) ───────
 C = {
-    "primary":         "#6750A4",
-    "primary_light":   "#EADDFF",
-    "primary_dark":    "#4F378B",
-    "rose":            "#F4C2C2",
-    "on_primary":      "#FFFFFF",
-    "surface":         "#FDFBFD",
-    "surface_variant": "#F3EFF7",
-    "on_surface":      "#1C1B1F",
-    "on_surface_dim":  "#79747E",
-    "outline":         "#CAC4D0",
-    "weekend":         "#B3261E",
+    "primary":         _T["primary"],
+    "primary_light":   _T["primary_light"],
+    "primary_dark":    _T["primary_dark"],
+    "rose":            _T["rose"],
+    "on_primary":      _T["on_primary"],
+    "surface":         _T["surface"],
+    "surface_variant": _T["surface_variant"],
+    "on_surface":      _T["on_surface"],
+    "on_surface_dim":  _T["on_surface_dim"],
+    "outline":         _T["outline_variant"],
+    "weekend":         _T["weekend"],
 }
 
 MONTHS_UA = [

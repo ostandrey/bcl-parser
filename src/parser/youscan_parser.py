@@ -33,13 +33,13 @@ class YouScanParser:
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
     
-    def __enter__(self):
-        """Context manager entry."""
-        self.start()
+    async def __aenter__(self):
+        """Async context manager entry."""
+        await self.start_async()
         return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
         self.close()
     
     async def start_async(self):

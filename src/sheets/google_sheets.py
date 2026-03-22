@@ -175,24 +175,32 @@ class GoogleSheetsWriter:
             logger.error(f"Failed to create sheet '{sheet_name}': {e}")
             raise
     
-    def _find_source_row(self, sheet, col_letter: str) -> Optional[int]:
+    def _get_all_values_cached(self, sheet) -> list:
+        """Fetch all sheet values once and cache on the sheet object to avoid extra API calls."""
+        if not hasattr(sheet, '_bcl_values_cache'):
+            sheet._bcl_values_cache = sheet.get_all_values()
+        return sheet._bcl_values_cache
+
+    def _find_source_row(self, sheet, col_letter: str,
+                         all_values: Optional[list] = None) -> Optional[int]:
         """Return 0-indexed row index of first data row with a value in col_letter. None if not found."""
         try:
-            col_idx = ord(col_letter.upper()) - ord('A') + 1
-            values = sheet.col_values(col_idx)
-            for i, val in enumerate(values[1:], start=1):  # skip header
-                if val and val.strip():
+            col_idx = ord(col_letter.upper()) - ord('A')
+            rows = all_values if all_values is not None else self._get_all_values_cached(sheet)
+            for i, row in enumerate(rows[1:], start=1):  # skip header
+                if col_idx < len(row) and row[col_idx] and row[col_idx].strip():
                     return i
         except Exception:
             pass
         return None
 
-    def find_last_row(self, sheet, start_row: int = 2) -> int:
+    def find_last_row(self, sheet, start_row: int = 2,
+                      all_values: Optional[list] = None) -> int:
         """Find the last non-empty row in a sheet (checks all columns)."""
         try:
-            all_values = sheet.get_all_values()
-            for i in range(len(all_values) - 1, start_row - 2, -1):
-                if any(cell.strip() for cell in all_values[i]):
+            rows = all_values if all_values is not None else self._get_all_values_cached(sheet)
+            for i in range(len(rows) - 1, start_row - 2, -1):
+                if any(cell.strip() for cell in rows[i]):
                     return i + 2  # +1 for 1-based index, +1 for next empty row
             return start_row
         except Exception:
@@ -220,10 +228,13 @@ class GoogleSheetsWriter:
         
         sheet = self.get_sheet(sheet_name, create_if_missing=True)
         column_mapping = get_column_mapping(sheet_name)
-        
+
+        # Fetch sheet data once — reused by find_last_row and _find_source_row
+        all_values = self._get_all_values_cached(sheet)
+
         # Determine start row
         if start_row is None:
-            start_row = self.find_last_row(sheet)
+            start_row = self.find_last_row(sheet, all_values=all_values)
         
         written = 0
         failed = []
@@ -398,7 +409,7 @@ class GoogleSheetsWriter:
                     continue
                 col_idx = ord(col_letter.upper()) - ord('A')
 
-                src_row = self._find_source_row(sheet, col_letter)
+                src_row = self._find_source_row(sheet, col_letter, all_values=all_values)
                 if src_row is not None:
                     # Copy chip-style from first existing data row
                     try:

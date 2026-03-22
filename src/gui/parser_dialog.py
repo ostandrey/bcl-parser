@@ -20,36 +20,14 @@ from ..parser.youscan_parser import YouScanParser
 from ..sheets.google_sheets import GoogleSheetsWriter
 from ..config import Config, SOCIAL_NETWORK_OPTIONS, TAG_OPTIONS
 from ..database.db_manager import DatabaseManager
-from ..utils.date_tracker import DateTracker
 from ..export.excel_exporter import export_entries_to_xlsx
+from .theme import COLORS
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MEDIA_TABLE = 'ЗМІ 2025'
 MAX_ERROR_DISPLAY = 20
 NOTE_TRUNCATE_LENGTH = 100
-
-COLORS = {
-    'primary':            '#6750A4',
-    'primary_container':  '#EADDFF',
-    'on_primary':         '#FFFFFF',
-    'secondary':          '#625B71',
-    'secondary_container':'#E8DEF8',
-    'surface':            '#FFFBFE',
-    'surface_variant':    '#F3EFF8',
-    'background':         '#FEF7FF',
-    'on_surface':         '#1C1B1F',
-    'on_surface_variant': '#49454F',
-    'outline':            '#79747E',
-    'outline_variant':    '#CAC4D0',
-    'shadow':             'rgba(0,0,0,0.15)',
-    'error':              '#BA1A1A',
-    'error_container':    '#F9DEDC',
-    'success':            '#1B5E20',
-    'success_container':  '#C8E6C9',
-    'warning':            '#F57C00',
-    'warning_container':  '#FFE0B2',
-}
 
 
 def _group_entries_by_table(entries: List[ParsedEntry]) -> Dict[str, List[ParsedEntry]]:
@@ -108,25 +86,31 @@ class SheetsWriteThread(QThread):
 
     def __init__(
         self,
-        writer: 'GoogleSheetsWriter',
+        spreadsheet_id: str,
         entries_by_table: Dict[str, list],
         selected_tables: set,
         remapping: Dict[str, str],
     ):
         super().__init__()
-        self._writer          = writer
+        self._spreadsheet_id   = spreadsheet_id
         self._entries_by_table = entries_by_table
         self._selected_tables  = selected_tables
         self._remapping        = remapping
 
     def run(self):
+        writer = GoogleSheetsWriter(self._spreadsheet_id)
+        try:
+            writer.connect()
+        except Exception as e:
+            self.failed.emit(f"Could not connect to Google Sheets:\n{e}")
+            return
         try:
             results: Dict[str, dict] = {}
             for orig_name, table_entries in self._entries_by_table.items():
                 if orig_name not in self._selected_tables:
                     continue
                 effective_name = self._remapping.get(orig_name, orig_name)
-                result = self._writer.write_entries(
+                result = writer.write_entries(
                     effective_name, table_entries,
                     progress_callback=lambda c, t, m: self.progress.emit(c, t, m),
                 )
@@ -421,16 +405,14 @@ class ParserDialog(QDialog):
         parent,
         config: Config,
         db_manager: DatabaseManager,
-        date_tracker: DateTracker,
         table_name: str,
         date_from: date,
         date_to: date,
     ):
         super().__init__(parent)
-        self.config       = config
-        self.db_manager   = db_manager
-        self.date_tracker = date_tracker
-        self.table_name   = table_name
+        self.config      = config
+        self.db_manager  = db_manager
+        self.table_name  = table_name
         self.date_from    = date_from
         self.date_to      = date_to
 
@@ -1143,21 +1125,6 @@ class ParserDialog(QDialog):
                                  "Please configure Google Sheets ID in Settings.")
             return
 
-        try:
-            sheets_writer = GoogleSheetsWriter(spreadsheet_id)
-            sheets_writer.connect()
-        except Exception as e:
-            QMessageBox.critical(self, "Connection Error",
-                                 f"Failed to connect to Google Sheets:\n{e}\n\n"
-                                 "Please check your credentials and spreadsheet ID.")
-            return
-
-        try:
-            self._available_sheets = sheets_writer.get_sheet_names()
-            self._update_table_selection(_group_entries_by_table(self.entries))
-        except Exception as _e:
-            logger.warning(f"Could not fetch sheet names: {_e}")
-
         entries_by_table = _group_entries_by_table(self._get_edited_entries())
         selected_tables  = self._get_selected_tables()
         remapping        = self._get_table_remapping()
@@ -1167,32 +1134,33 @@ class ParserDialog(QDialog):
                                 "Please select at least one table to write to.")
             return
 
-        existing = set(self._available_sheets)
-        truly_missing = [
-            remapping.get(t, t) for t in selected_tables
-            if remapping.get(t, t) not in existing
-        ]
-        if truly_missing:
-            names = '\n'.join(f'  • {t}' for t in truly_missing)
-            reply = QMessageBox.question(
-                self, "Таблиці не існують",
-                f"Наступні таблиці не знайдено у Google Sheets:\n{names}\n\n"
-                f"Якщо продовжити — вони будуть створені автоматично.\n"
-                f"Натисніть «Ні», щоб скасувати і обрати іншу таблицю.",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                self._set_progress(0, "")
-                return
+        if self._available_sheets:
+            existing = set(self._available_sheets)
+            truly_missing = [
+                remapping.get(t, t) for t in selected_tables
+                if remapping.get(t, t) not in existing
+            ]
+            if truly_missing:
+                names = '\n'.join(f'  • {t}' for t in truly_missing)
+                reply = QMessageBox.question(
+                    self, "Таблиці не існують",
+                    f"Наступні таблиці не знайдено у Google Sheets:\n{names}\n\n"
+                    f"Якщо продовжити — вони будуть створені автоматично.\n"
+                    f"Натисніть «Ні», щоб скасувати і обрати іншу таблицю.",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    self._set_progress(0, "")
+                    return
 
         for w in (self.submit_button, self.export_button,
                   self.cancel_button, self.browse_export_button):
             w.setEnabled(False)
-        self._set_progress(0, "Writing to Google Sheets…")
+        self._set_progress(0, "Connecting to Google Sheets…")
 
         self._sheets_thread = SheetsWriteThread(
-            sheets_writer, entries_by_table, selected_tables, remapping
+            spreadsheet_id, entries_by_table, selected_tables, remapping
         )
         self._sheets_thread.progress.connect(
             lambda c, t, m: self._set_progress(int((c / t) * 100) if t else 0, m)
@@ -1221,7 +1189,9 @@ class ParserDialog(QDialog):
                         self.db_manager.mark_date_parsed(effective_name, entry.date)
 
         if total_failed:
-            self._set_progress(total_written, total_written + len(total_failed), "Partial success")
+            total_all = total_written + len(total_failed)
+            pct = int(total_written / total_all * 100) if total_all else 0
+            self._set_progress(pct, f"⚠️ Partial — {total_written} written, {len(total_failed)} failed")
             reply = QMessageBox.question(
                 self, "Partial Success",
                 f"Wrote {total_written} entries, but {len(total_failed)} failed.\n\n"
