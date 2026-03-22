@@ -526,35 +526,43 @@ class ParserDialog(QDialog):
         self.entries_table.horizontalHeader().setStretchLastSection(True)
         self.entries_table.setStyleSheet(f"""
             QTableWidget {{
-                border: 1px solid {COLORS['outline_variant']};
-                border-radius: 8px;
+                border: 1.5px solid {COLORS['outline_variant']};
+                border-radius: 10px;
                 background-color: {COLORS['surface']};
                 gridline-color: {COLORS['outline_variant']};
                 font-size: 9pt;
                 color: {COLORS['on_surface']};
             }}
             QTableWidget::item {{
-                padding: 5px 8px;
+                padding: 6px 10px;
+                border: none;
             }}
             QTableWidget::item:alternate {{
-                background-color: {COLORS['surface_variant']};
+                background-color: #F5F0FC;
             }}
             QTableWidget::item:selected {{
                 background-color: {COLORS['primary_container']};
                 color: {COLORS['on_surface']};
             }}
             QTableWidget::item:hover {{
-                background-color: {COLORS['primary_container']};
+                background-color: #E8DEFF;
             }}
             QHeaderView::section {{
-                background-color: {COLORS['primary_container']};
-                color: {COLORS['primary']};
-                padding: 7px 8px;
+                background-color: {COLORS['primary']};
+                color: #FFFFFF;
+                padding: 8px 10px;
                 border: none;
-                border-bottom: 2px solid {COLORS['primary']};
-                border-right: 1px solid {COLORS['outline_variant']};
-                font-weight: 700;
-                font-size: 10pt;
+                border-right: 1px solid #7B62B8;
+                font-weight: 600;
+                font-size: 9pt;
+                letter-spacing: 0.3px;
+            }}
+            QHeaderView::section:first {{
+                border-top-left-radius: 8px;
+            }}
+            QHeaderView::section:last {{
+                border-top-right-radius: 8px;
+                border-right: none;
             }}
             QScrollBar:vertical {{
                 border: none;

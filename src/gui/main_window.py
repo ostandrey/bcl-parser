@@ -65,11 +65,16 @@ class MainWindow(QMainWindow):
         w.setStyleSheet("background: transparent; border: none;")
         row = QHBoxLayout(w)
         row.setContentsMargins(4, 0, 0, 4)
-        row.setSpacing(10)
+        row.setSpacing(12)
 
-        icon = QLabel("🗂")
-        icon.setStyleSheet("font-size: 22pt; background: transparent; border: none;")
-        row.addWidget(icon)
+        # App icon from the window icon (same as taskbar)
+        icon_lbl = QLabel()
+        from PyQt6.QtGui import QPixmap
+        icon_px = self.windowIcon().pixmap(32, 32)
+        if not icon_px.isNull():
+            icon_lbl.setPixmap(icon_px)
+        icon_lbl.setStyleSheet("background: transparent; border: none;")
+        row.addWidget(icon_lbl)
 
         title = QLabel("BCL Parser")
         title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
