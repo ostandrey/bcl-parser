@@ -175,6 +175,18 @@ class GoogleSheetsWriter:
             logger.error(f"Failed to create sheet '{sheet_name}': {e}")
             raise
     
+    def _find_source_row(self, sheet, col_letter: str) -> Optional[int]:
+        """Return 0-indexed row index of first data row with a value in col_letter. None if not found."""
+        try:
+            col_idx = ord(col_letter.upper()) - ord('A') + 1
+            values = sheet.col_values(col_idx)
+            for i, val in enumerate(values[1:], start=1):  # skip header
+                if val and val.strip():
+                    return i
+        except Exception:
+            pass
+        return None
+
     def find_last_row(self, sheet, start_row: int = 2) -> int:
         """Find the last non-empty row in a sheet (checks all columns)."""
         try:
@@ -254,8 +266,8 @@ class GoogleSheetsWriter:
                     last_col = sorted(column_mapping.values())[-1] if column_mapping.values() else 'G'
                     range_name = f"{first_col}{first_row_num}:{last_col}{last_row_num}"
                     
-                    # Write entire batch at once (list of lists)
-                    sheet.update(range_name, batch_rows, value_input_option='RAW')
+                    # Write entire batch at once (USER_ENTERED so links become hyperlinks)
+                    sheet.update(range_name, batch_rows, value_input_option='USER_ENTERED')
                     
                     # All rows in batch written successfully
                     written += len(batch_rows)
@@ -289,7 +301,7 @@ class GoogleSheetsWriter:
                                         first_col = sorted(column_mapping.values())[0] if column_mapping.values() else 'A'
                                         last_col = sorted(column_mapping.values())[-1] if column_mapping.values() else 'G'
                                         range_name = f"{first_col}{row_num}:{last_col}{row_num}"
-                                        sheet.update(range_name, [row_values], value_input_option='RAW')
+                                        sheet.update(range_name, [row_values], value_input_option='USER_ENTERED')
                                         written += 1
                                         individual_written = True
                                         
@@ -323,13 +335,122 @@ class GoogleSheetsWriter:
             if batch_end < len(rows_to_write):
                 time.sleep(delay_between_batches)
         
+        # Apply Montserrat font + copy data validation from row 2 to new rows
+        if written > 0:
+            col_count = len(column_mapping) if column_mapping else 7
+            sheet_id  = sheet.id
+            new_start = start_row - 1        # 0-indexed first new row
+            new_end   = new_start + written  # 0-indexed exclusive
+
+            try:
+                first_col = sorted(column_mapping.values())[0] if column_mapping.values() else 'A'
+                last_col  = sorted(column_mapping.values())[-1] if column_mapping.values() else 'G'
+                fmt_range = f"{first_col}{start_row}:{last_col}{start_row + written - 1}"
+                sheet.format(fmt_range, {'textFormat': {'fontFamily': 'Montserrat'}})
+            except Exception as fmt_err:
+                logger.warning(f"Could not apply Montserrat font: {fmt_err}")
+
+            # Set actual hyperlinks on the Лінк column cells
+            try:
+                link_col = column_mapping.get('Лінк') or column_mapping.get('Лінк')
+                if link_col:
+                    link_col_idx = ord(link_col.upper()) - ord('A')
+                    cell_updates = []
+                    for i, entry in enumerate(entries):
+                        url = entry.link or ''
+                        if not url:
+                            continue
+                        cell_updates.append({
+                            'updateCells': {
+                                'rows': [{'values': [{
+                                    'userEnteredValue': {'stringValue': url},
+                                    'userEnteredFormat': {
+                                        'textFormat': {
+                                            'fontFamily': 'Montserrat',
+                                            'link': {'uri': url},
+                                            'foregroundColorStyle': {'rgbColor': {'red': 0.07, 'green': 0.36, 'blue': 0.78}},
+                                            'underline': True,
+                                        }
+                                    },
+                                }]}],
+                                'fields': 'userEnteredValue,userEnteredFormat.textFormat',
+                                'range': {
+                                    'sheetId':        sheet_id,
+                                    'startRowIndex':  new_start + i,
+                                    'endRowIndex':    new_start + i + 1,
+                                    'startColumnIndex': link_col_idx,
+                                    'endColumnIndex':   link_col_idx + 1,
+                                },
+                            }
+                        })
+                    if cell_updates:
+                        sheet.spreadsheet.batch_update({'requests': cell_updates})
+            except Exception as link_err:
+                logger.warning(f"Could not set hyperlinks: {link_err}")
+
+            # Copy chip-style validation for Соцмережа and Тема
+            for col_key, fallback_options in [
+                ('Соцмережа', SOCIAL_NETWORK_OPTIONS),
+                ('Тема',      TAG_OPTIONS),
+            ]:
+                col_letter = column_mapping.get(col_key)
+                if not col_letter:
+                    continue
+                col_idx = ord(col_letter.upper()) - ord('A')
+
+                src_row = self._find_source_row(sheet, col_letter)
+                if src_row is not None:
+                    # Copy chip-style from first existing data row
+                    try:
+                        sheet.spreadsheet.batch_update({'requests': [{
+                            'copyPaste': {
+                                'source': {
+                                    'sheetId': sheet_id,
+                                    'startRowIndex': src_row, 'endRowIndex': src_row + 1,
+                                    'startColumnIndex': col_idx, 'endColumnIndex': col_idx + 1,
+                                },
+                                'destination': {
+                                    'sheetId': sheet_id,
+                                    'startRowIndex': new_start, 'endRowIndex': new_end,
+                                    'startColumnIndex': col_idx, 'endColumnIndex': col_idx + 1,
+                                },
+                                'pasteType': 'PASTE_DATA_VALIDATION',
+                                'pasteOrientation': 'NORMAL',
+                            }
+                        }]})
+                        continue
+                    except Exception as e:
+                        logger.warning(f"copyPaste failed for {col_key}, falling back: {e}")
+
+                # Fallback for new/empty sheets: setDataValidation (old style but functional)
+                try:
+                    sheet.spreadsheet.batch_update({'requests': [{
+                        'setDataValidation': {
+                            'range': {
+                                'sheetId': sheet_id,
+                                'startRowIndex':    new_start, 'endRowIndex': new_end,
+                                'startColumnIndex': col_idx,   'endColumnIndex': col_idx + 1,
+                            },
+                            'rule': {
+                                'condition': {
+                                    'type':   'ONE_OF_LIST',
+                                    'values': [{'userEnteredValue': v} for v in fallback_options],
+                                },
+                                'showCustomUi': True,
+                                'strict':       False,
+                            },
+                        }
+                    }]})
+                except Exception as e:
+                    logger.warning(f"Could not set validation for {col_key}: {e}")
+
         # Final progress update
         if progress_callback:
             if len(failed) == 0:
                 progress_callback(len(entries), len(entries), f"Successfully wrote {written} entries to Google Sheets")
             else:
                 progress_callback(written, len(entries), f"Wrote {written}/{len(entries)} entries ({len(failed)} failed)")
-        
+
         return {
             'success': len(failed) == 0,
             'written': written,

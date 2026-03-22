@@ -1682,20 +1682,34 @@ class YouScanParser:
                 # Try to identify username (usually first part or "Невідомий користувач")
                 # Skip username and collect the rest
                 if parts:
-                    # Check if first part looks like username (starts with capital or is "Невідомий")
-                    if parts[0] == "Невідомий" and len(parts) > 1 and parts[1] == "користувач":
-                        # Skip "Невідомий користувач"
+                    # Find where the action verb starts (skip the username regardless of length)
+                    action_verbs = [
+                        'поділився', 'поділилась', 'поділилися',
+                        'відповів', 'відповіла',
+                        'прокоментував', 'прокоментувала',
+                        'поставив', 'поставила',
+                        'написав', 'написала',
+                        'опублікував', 'опублікувала',
+                        'додав', 'додала',
+                        'оновив', 'оновила',
+                        'liked', 'shared', 'commented',
+                    ]
+                    action_idx = None
+                    for i, part in enumerate(parts):
+                        if any(part.lower().startswith(v) for v in action_verbs):
+                            action_idx = i
+                            break
+
+                    if action_idx is not None:
+                        note_text = ' '.join(parts[action_idx:])
+                    elif parts[0] == "Невідомий" and len(parts) > 1 and parts[1] == "користувач":
                         note_text = ' '.join(parts[2:])
                     else:
-                        # Skip first part (username)
                         note_text = ' '.join(parts[1:])
-                    
+
                     if note_text:
-                        # Clean up engagement numbers like "1 тис."
                         note_text = re.sub(r'\d+\s*тис\.', '', note_text).strip()
-                        # Remove redundant spaces
                         note_text = re.sub(r'\s+', ' ', note_text).strip()
-                        
                         if note_text:
                             return note_text
         except Exception as e:

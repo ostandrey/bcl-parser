@@ -18,7 +18,7 @@ from PyQt6.QtGui import QFont
 from ..database.models import ParsedEntry
 from ..parser.youscan_parser import YouScanParser
 from ..sheets.google_sheets import GoogleSheetsWriter
-from ..config import Config
+from ..config import Config, SOCIAL_NETWORK_OPTIONS, TAG_OPTIONS
 from ..database.db_manager import DatabaseManager
 from ..utils.date_tracker import DateTracker
 from ..export.excel_exporter import export_entries_to_xlsx
@@ -881,24 +881,48 @@ class ParserDialog(QDialog):
         pct = int((current / total) * 100)
         self._set_progress(pct, message)
 
+    def _make_combo(self, options: list, current: str) -> QComboBox:
+        """Small editable dropdown for preview table cells."""
+        combo = QComboBox()
+        combo.addItems(options)
+        if current in options:
+            combo.setCurrentText(current)
+        elif current:
+            combo.insertItem(0, current)
+            combo.setCurrentIndex(0)
+        combo.setStyleSheet(f"""
+            QComboBox {{
+                border: 1px solid {COLORS['outline_variant']};
+                border-radius: 6px;
+                padding: 2px 6px;
+                font-size: 9pt;
+                background: {COLORS['surface']};
+                color: {COLORS['on_surface']};
+            }}
+            QComboBox::drop-down {{ border: none; width: 18px; }}
+            QComboBox:hover {{ border-color: {COLORS['primary']}; }}
+        """)
+        return combo
+
     def _on_entry_parsed(self, entry: ParsedEntry):
         row = self.entries_table.rowCount()
         self.entries_table.insertRow(row)
         self.entries_table.setRowHeight(row, 36)
 
         table_name = entry.table_name or DEFAULT_MEDIA_TABLE
-        social     = entry.social_network or ''
+        note_short = (entry.note or '')[:NOTE_TRUNCATE_LENGTH]
+        if len(entry.note or '') > NOTE_TRUNCATE_LENGTH:
+            note_short += '...'
 
-        values = [
-            table_name,
-            entry.name or '',
-            '',  # Social Network — rendered as pill widget below
-            entry.tag or '',
-            entry.link or '',
-            (entry.note or '')[:NOTE_TRUNCATE_LENGTH] + ('...' if len(entry.note or '') > NOTE_TRUNCATE_LENGTH else ''),
-            entry.description or '',
-        ]
-        for col, val in enumerate(values):
+        # Plain text columns: 0=Table, 1=Name, 4=Link, 5=Note, 6=Description
+        plain = {
+            0: table_name,
+            1: entry.name or '',
+            4: entry.link or '',
+            5: note_short,
+            6: entry.description or '',
+        }
+        for col, val in plain.items():
             item = QTableWidgetItem(val)
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             if col == 5:
@@ -907,8 +931,14 @@ class ParserDialog(QDialog):
                 item.setToolTip(entry.description or '')
             self.entries_table.setItem(row, col, item)
 
-        if social:
-            self.entries_table.setCellWidget(row, 2, _make_social_pill(social))
+        # Col 2: Social Network dropdown
+        self.entries_table.setCellWidget(
+            row, 2, self._make_combo(SOCIAL_NETWORK_OPTIONS, entry.social_network or '')
+        )
+        # Col 3: Tag dropdown
+        self.entries_table.setCellWidget(
+            row, 3, self._make_combo(TAG_OPTIONS, entry.tag or '')
+        )
 
         self.entries_table.scrollToBottom()
         self._entries_badge.set_value(row + 1, "entries")
@@ -985,6 +1015,21 @@ class ParserDialog(QDialog):
             self._missing_tables_warning.setVisible(False)
 
         self.table_selection_group.setVisible(bool(entries_by_table))
+
+    def _get_edited_entries(self) -> List[ParsedEntry]:
+        """Return entries with social_network and tag updated from dropdown widgets."""
+        edited = []
+        for row_idx, entry in enumerate(self.entries):
+            social_combo = self.entries_table.cellWidget(row_idx, 2)
+            tag_combo    = self.entries_table.cellWidget(row_idx, 3)
+            import dataclasses
+            updated = dataclasses.replace(
+                entry,
+                social_network=social_combo.currentText() if social_combo else entry.social_network,
+                tag=tag_combo.currentText() if tag_combo else entry.tag,
+            )
+            edited.append(updated)
+        return edited
 
     def _get_selected_tables(self) -> set:
         """Return set of original table names that are checked."""
@@ -1113,7 +1158,7 @@ class ParserDialog(QDialog):
         except Exception as _e:
             logger.warning(f"Could not fetch sheet names: {_e}")
 
-        entries_by_table = _group_entries_by_table(self.entries)
+        entries_by_table = _group_entries_by_table(self._get_edited_entries())
         selected_tables  = self._get_selected_tables()
         remapping        = self._get_table_remapping()
 
@@ -1162,6 +1207,7 @@ class ParserDialog(QDialog):
             w.setEnabled(True)
 
         total_written, total_failed = 0, []
+        edited_by_table = _group_entries_by_table(self._get_edited_entries())
         for orig_name, result in results.items():
             effective_name = result.get('effective_name', orig_name)
             total_written += result.get('written', 0)
@@ -1169,7 +1215,7 @@ class ParserDialog(QDialog):
                 fe['table'] = effective_name
                 total_failed.append(fe)
             if result.get('success'):
-                table_entries = _group_entries_by_table(self.entries).get(orig_name, [])
+                table_entries = edited_by_table.get(orig_name, [])
                 for entry in table_entries:
                     if entry.date:
                         self.db_manager.mark_date_parsed(effective_name, entry.date)
