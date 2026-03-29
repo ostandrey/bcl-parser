@@ -6,7 +6,10 @@ from datetime import date, datetime
 from typing import List, Optional, Dict
 from playwright.async_api import async_playwright, Page, Browser, BrowserContext
 from ..database.models import ParsedEntry
-from ..config import detect_table_from_link, detect_table_from_entry, detect_social_network_from_link, SOCIAL_NETWORK_OPTIONS, TAG_OPTIONS
+from ..config import (detect_table_from_link, detect_table_from_entry,
+                      detect_social_network_from_link,
+                      SOCIAL_NETWORK_OPTIONS, TAG_OPTIONS, SOCIAL_NETWORK_DOMAINS,
+                      _extract_netloc)
 
 
 class YouScanParser:
@@ -1237,8 +1240,7 @@ class YouScanParser:
                 link_href = await link_elem.get_attribute('href') or ''
                 entry.link = link_href
                 entry.social_network = detect_social_network_from_link(link_href)
-                logger.debug(f"Found link: {link_href}, social network: {entry.social_network}")
-                print(f"[LINK] Found link: {link_href}, social network: {entry.social_network}")
+                logger.info(f"[STEP2] link_elem found: {link_href!r}, social={entry.social_network!r}")
             else:
                 # Fallback: Look for social network name in span
                 # Structure: <span class="FnMtmUa9bs__3sxIz_4N BgNMJrrsKXup73BhMooc">facebook.com</span>
@@ -1247,11 +1249,9 @@ class YouScanParser:
                 if social_span:
                     social_text = (await social_span.inner_text()).strip()
                     if social_text:
-                        # Clean up the text (remove any extra whitespace)
                         social_text = social_text.strip()
                         entry.social_network = detect_social_network_from_link(f"https://{social_text}")
-                        logger.info(f"Found social network from span: {social_text}, detected: {entry.social_network}")
-                        print(f"[LINK] Found social network from span: '{social_text}', detected: {entry.social_network}")
+                        logger.info(f"[STEP2-SPAN] span text={social_text!r} → social={entry.social_network!r}")
                 
                 # Additional fallback: Search for social network names in entry text
                 if not entry.social_network:
@@ -1261,14 +1261,67 @@ class YouScanParser:
                     if 't.me' in entry_text_lower or 'telegram.me' in entry_text_lower or 'telegram' in entry_text_lower:
                         entry.social_network = 'Telegram'
                         logger.info(f"Detected Telegram from entry text")
-                        print(f"[LINK] Detected Telegram from entry text")
             
             # 3. Get link via share button (if not found above)
             if not entry.link:
+                logger.info(f"[STEP3] No link yet (social={entry.social_network!r}), trying share button...")
                 entry.link = await self._get_link_via_share_button_async(entry_elem)
                 if entry.link:
                     entry.social_network = detect_social_network_from_link(entry.link)
-            
+                    logger.info(f"[STEP3] share button → link={entry.link!r}, social={entry.social_network!r}")
+                else:
+                    logger.info(f"[STEP3] share button returned empty")
+
+            # 3b. If current link is a social/short URL, look for a real external
+            # media link inside the entry card (e.g. interfax.com.ua shared on Twitter).
+            _SHORTENERS = ('t.co', 'bit.ly', 'tinyurl.com', 'ow.ly', 'buff.ly')
+            _link_netloc = _extract_netloc(entry.link) if entry.link else ''
+            _link_is_social = entry.link and (
+                any(_link_netloc == d or _link_netloc.endswith('.' + d) for d in SOCIAL_NETWORK_DOMAINS)
+                or any(s in entry.link.lower() for s in _SHORTENERS)
+            )
+            if _link_is_social or not entry.link:
+                logger.info(f"[STEP3b] link_is_social={_link_is_social}, link={entry.link!r}, social={entry.social_network!r} → scanning hrefs...")
+                _found_media_link = False
+                try:
+                    all_hrefs = await entry_elem.query_selector_all('a[href^="http"]')
+                    _all_href_values = []
+                    for _a in all_hrefs:
+                        _href = (await _a.get_attribute('href') or '').strip()
+                        if not _href:
+                            continue
+                        _all_href_values.append(_href)
+                        _hl = _extract_netloc(_href)
+                        _is_social = any(_hl == d or _hl.endswith('.' + d) for d in SOCIAL_NETWORK_DOMAINS)
+                        _is_short  = any(s in _href.lower() for s in _SHORTENERS)
+                        if not _is_social and not _is_short:
+                            entry.link = _href
+                            entry.social_network = ''
+                            _found_media_link = True
+                            break
+                    logger.info(f"[STEP3b] all hrefs in entry: {_all_href_values}, found_media={_found_media_link}")
+                except Exception as _ex:
+                    logger.info(f"[STEP3b] hrefs scan error: {_ex}")
+
+                # Fallback: the article URL is only reachable via "Скопіювати посилання".
+                # Use the share-button clipboard intercept to get it.
+                # Only try share-button fallback for shortener URLs (t.co etc.)
+                # — full social URLs (facebook, instagram…) will never expose a
+                # different media link via their copy-link button.
+                _link_is_shortener = entry.link and any(s in entry.link.lower() for s in _SHORTENERS)
+                if not _found_media_link and (_link_is_shortener or not entry.link):
+                    logger.info(f"[STEP3b] no media href found, trying share button fallback...")
+                    _share_url = await self._get_link_via_share_button_async(entry_elem)
+                    logger.info(f"[STEP3b] share button returned: {_share_url!r}")
+                    if _share_url and _share_url.startswith('http'):
+                        _shl = _extract_netloc(_share_url)
+                        _s_social = any(_shl == d or _shl.endswith('.' + d) for d in SOCIAL_NETWORK_DOMAINS)
+                        _s_short  = any(s in _share_url.lower() for s in _SHORTENERS)
+                        if not _s_social and not _s_short:
+                            entry.link = _share_url
+                            entry.social_network = ''
+                            logger.info(f"[STEP3b] share button gave media link: {_share_url!r}")
+
             # 4. Parse tags (Тема) - get first one
             tags = await self._parse_tags_async(entry_elem)
             entry.tag = tags[0] if tags else ''
@@ -1281,9 +1334,20 @@ class YouScanParser:
             entry.description = await self._parse_user_description_async(entry_elem, name_elem)
             
             # 7. Determine table name based on entry (year-based)
+            # If the link is a media/news domain, clear any social_network that
+            # was wrongly picked up from YouScan metadata (e.g. "Twitter (X)"
+            # when the actual link points to interfax.com.ua).
+            if entry.link:
+                _step7_netloc = _extract_netloc(entry.link)
+                _step7_link_lower = entry.link.lower()
+                is_social_link = (
+                    any(_step7_netloc == d or _step7_netloc.endswith('.' + d) for d in SOCIAL_NETWORK_DOMAINS)
+                    or any(s in _step7_link_lower for s in ('t.co', 'bit.ly', 'tinyurl.com'))
+                )
+                if not is_social_link:
+                    entry.social_network = ''
             entry.table_name = detect_table_from_entry(entry)
-            logger.debug(f"Determined table name: {entry.table_name} for entry date: {entry.date}")
-            print(f"[TABLE] Determined table name: {entry.table_name} for entry date: {entry.date}")
+            logger.info(f"[STEP7] FINAL: link={entry.link!r}, social={entry.social_network!r}, table={entry.table_name!r}")
             
             return entry
             
@@ -1294,65 +1358,118 @@ class YouScanParser:
             return None
     
     async def _get_link_via_share_button_async(self, entry_elem) -> str:
-        """Click share button and get link (async version)."""
+        """Click share button, intercept clipboard write, and return the copied URL."""
         try:
-            # Find share button (icon with share symbol)
+            # Intercept navigator.clipboard.writeText so we can read the URL
+            await self.page.evaluate("""
+                window.__bcl_clipboard = '';
+                const orig = navigator.clipboard.writeText.bind(navigator.clipboard);
+                navigator.clipboard.writeText = (text) => {
+                    window.__bcl_clipboard = text;
+                    return orig(text).catch(() => {});
+                };
+            """)
+
+            # Hover over the entry to reveal hidden action buttons, then find
+            # the share/copy-link icon.
+            try:
+                await entry_elem.hover()
+                await asyncio.sleep(0.3)
+            except Exception:
+                pass
+
             share_selectors = [
-                'button[aria-label*="share"]',
-                'button[aria-label*="поділитися"]',
+                # Exact match from DevTools inspection
+                'button[aria-label="Поділитися"]',
+                'button[data-hook="icon-button"][aria-label="Поділитися"]',
+                # Try direct copy-link button first (fastest)
+                '[aria-label="Скопіювати посилання"]',
+                '[title="Скопіювати посилання"]',
+                '[aria-label*="Скопіювати"]',
+                '[title*="Скопіювати"]',
+                # Generic share/copy patterns (case-insensitive fallbacks)
+                '[data-hook*="copy"]',
+                '[data-hook*="share"]',
                 '[class*="share"]',
-                'button:has([class*="share"])',
-                'svg:has-text("share")',
+                'button[aria-label*="share"]',
+                '[title*="share"]',
             ]
-            
             share_button = None
-            for selector in share_selectors:
+            for sel in share_selectors:
                 try:
-                    share_button = await entry_elem.query_selector(selector)
+                    share_button = await entry_elem.query_selector(sel)
                     if share_button:
                         break
-                except:
+                except Exception:
                     continue
-            
+
             if not share_button:
                 return ''
-            
-            # Click share button
+
             await share_button.click()
-            await asyncio.sleep(1)
-            
-            # Look for "Скопіювати посилання" button
-            copy_link_selectors = [
-                'button:has-text("Скопіювати посилання")',
-                'button:has-text("Copy link")',
-                '[class*="copy"]:has-text("посилання")',
-                '[class*="copy"]:has-text("link")',
-            ]
-            
-            copy_button = None
-            for selector in copy_link_selectors:
+            await asyncio.sleep(0.5)
+
+            # Fast path: if clicking the button itself wrote to clipboard, we're done.
+            _clip_fast = await self.page.evaluate("window.__bcl_clipboard || ''")
+            if _clip_fast and _clip_fast.startswith('http'):
                 try:
-                    copy_button = await self.page.wait_for_selector(selector, timeout=2000)
-                    if copy_button:
+                    await self.page.keyboard.press('Escape')
+                except Exception:
+                    pass
+                return _clip_fast.strip()
+
+            # Look for "Скопіювати посилання" in the page-level dropdown.
+            # Known classes from DevTools:
+            #   Container: div.9gNqmLfDG57uUskRJf3g  (320×36 menu item)
+            #   Text:      div._VT_TC37eW574Ky10hXEw  "Скопіювати посилання"
+            copy_selectors = [
+                'div.9gNqmLfDG57uUskRJf3g',
+                '[class*="_VT_TC37eW574Ky10hXEw"]',
+                'text=Скопіювати посилання',
+                'text=Copy link',
+                '[class*="copy"]:has-text("посилання")',
+            ]
+            copy_item = None
+            for sel in copy_selectors:
+                try:
+                    copy_item = await self.page.wait_for_selector(sel, timeout=1500)
+                    if copy_item:
                         break
-                except:
+                except Exception:
                     continue
-            
-            if copy_button:
-                await copy_button.click()
-                await asyncio.sleep(0.5)
-                # Link should be in clipboard, but we can try to get it from the dialog
-                # For now, we'll need to handle clipboard or get from dialog
-                # This is a simplified version - may need adjustment
-            
-            # Close share dialog if open
-            close_button = await self.page.query_selector('button[aria-label="Close"], button:has-text("×"), [class*="close"]')
-            if close_button:
-                await close_button.click()
-                await asyncio.sleep(0.5)
-            
-            # Return empty for now - clipboard access in async context needs special handling
-            return ''
+
+            if copy_item:
+                # Before clicking, also check if the dialog has an <a href> with the URL
+                # (class 5dsDJ1B2pIZy1WmxOV seen in DevTools – may carry the article href)
+                try:
+                    dialog_link = await self.page.query_selector(
+                        'a.5dsDJ1B2pIZy1WmxOV[href^="http"], [role="dialog"] a[href^="http"]'
+                    )
+                    if dialog_link:
+                        _href = (await dialog_link.get_attribute('href') or '').strip()
+                        if _href and _href.startswith('http'):
+                            try:
+                                await self.page.keyboard.press('Escape')
+                            except Exception:
+                                pass
+                            return _href
+                except Exception:
+                    pass
+
+                await copy_item.click()
+                await asyncio.sleep(0.4)
+
+            # Read intercepted clipboard value
+            url = await self.page.evaluate("window.__bcl_clipboard || ''")
+
+            # Close any open dropdown (press Escape)
+            try:
+                await self.page.keyboard.press('Escape')
+                await asyncio.sleep(0.2)
+            except Exception:
+                pass
+
+            return url.strip() if url and url.startswith('http') else ''
         except Exception as e:
             print(f"Error getting link via share button: {e}")
             return ''
@@ -1447,7 +1564,6 @@ class YouScanParser:
                     if tag_text not in found_tags:
                         found_tags.append(tag_text)
                 logger.info(f"Found tags via JavaScript (last div method): {tag_texts}")
-                print(f"[TAG] Found tags via JavaScript: {tag_texts}")
         except Exception as e:
             logger.debug(f"JavaScript tag extraction failed: {e}")
             import traceback
@@ -1502,7 +1618,6 @@ class YouScanParser:
                                 if tag_text not in found_tags:
                                     found_tags.append(tag_text)
                                     logger.info(f"Found tag in child div {i} (CSS method): {tag_text}")
-                                    print(f"[TAG] Found tag via CSS (div {i}): {tag_text}")
                 except Exception as e:
                     logger.debug(f"Error extracting tag from wrapper: {e}")
                     continue
@@ -1535,7 +1650,6 @@ class YouScanParser:
                         if tag_text not in found_tags:
                             found_tags.append(tag_text)
                             logger.info(f"Found tag via selector {selector}: {tag_text}")
-                            print(f"[TAG] Found tag via fallback selector: {tag_text}")
             except Exception as e:
                 logger.debug(f"Selector {selector} failed: {e}")
                 continue
@@ -1590,7 +1704,6 @@ class YouScanParser:
                 if tag_found and tag_found not in found_tags:
                     found_tags.append(tag_found)
                     logger.info(f"Found tag '{tag_found}' matching dropdown option '{tag_option}' (Strategy 4)")
-                    print(f"[TAG] Found tag '{tag_found}' matching dropdown option '{tag_option}' (Strategy 4)")
         except Exception as e:
             logger.debug(f"Strategy 4 (direct tag search) failed: {e}")
             import traceback
@@ -1644,13 +1757,10 @@ class YouScanParser:
         # Log final results
         if matched_tags:
             logger.info(f"Final matched tags: {matched_tags}")
-            print(f"[TAG] Final matched tags: {matched_tags}")
         elif found_tags:
             logger.warning(f"Found tags but no matches: {found_tags}")
-            print(f"[TAG] Found tags but no matches: {found_tags}")
         else:
             logger.warning("No tags found for this entry")
-            print(f"[TAG] No tags found for this entry")
         
         # Return all matched tags (not just first one)
         # Note: We take the first tag when assigning to entry.tag, and return all for flexibility
@@ -1849,7 +1959,6 @@ class YouScanParser:
                 
                 if clicked:
                     logger.debug("Clicked on username element (or parent)")
-                    print(f"[DESC] Clicked on username element")
                 else:
                     logger.debug("Could not click username element")
                     return ''
@@ -1889,7 +1998,6 @@ class YouScanParser:
                 
                 if modal:
                     logger.debug("Modal found, searching for description")
-                    print(f"[DESC] Modal found, searching for description")
                     
                     # Try multiple strategies to find the description div
                     # jrnY5tmnFg128QMOKSyq is used for both Facebook and Instagram popups
@@ -1907,7 +2015,6 @@ class YouScanParser:
                                 desc_text = (await desc_elem.inner_text()).strip()
                                 if desc_text and len(desc_text) > 10:  # Must have substantial content
                                     logger.info(f"Found description using selector: {selector}")
-                                    print(f"[DESC] Found description: {desc_text[:100]}...")
                                     break
                         except:
                             continue
@@ -1946,11 +2053,9 @@ class YouScanParser:
                     return desc_text
                 else:
                     logger.debug("No modal found after clicking username")
-                    print(f"[DESC] No modal found after clicking username")
                 
         except Exception as e:
             logger.warning(f"Error parsing user description: {e}")
-            print(f"[DESC] Error parsing user description: {e}")
             import traceback
             traceback.print_exc()
         

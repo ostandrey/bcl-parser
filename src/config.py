@@ -297,41 +297,55 @@ def detect_table_from_link(link: str, entry_date=None) -> str:
 def detect_table_from_entry(entry) -> str:
     """
     Detect which table to use based on entry (preferred method).
-    
-    Args:
-        entry: ParsedEntry object with link, social_network, and date
-    
+
+    Priority: link domain > social_network field.
+    The link domain is the ground truth — if the URL is from a news site
+    (e.g. interfax.com.ua) it must go to ЗМІ even if a social_network
+    value was parsed from context.
+
     Returns:
-        Table name with year (e.g., "Соцмережі 2025" or "ЗМІ 2025")
+        Table name with year (e.g., "Соцмережі 2026" or "ЗМІ 2026")
     """
     from datetime import date
-    
-    # Determine year from entry date
-    if entry.date:
-        year = entry.date.year
-    else:
-        year = date.today().year
-    
-    # Check if entry has a social network (most reliable method)
+
+    year = entry.date.year if entry.date else date.today().year
+
+    if entry.link:
+        netloc = _extract_netloc(entry.link)
+        if any(netloc == d or netloc.endswith('.' + d) for d in SOCIAL_NETWORK_DOMAINS):
+            return TABLE_NAME_PATTERNS['social_network'].format(YEAR=year)
+        # Link exists but domain is NOT a social network → definitely media
+        return TABLE_NAME_PATTERNS['media'].format(YEAR=year)
+
+    # No link — fall back to social_network field
     if entry.social_network and entry.social_network.strip():
         return TABLE_NAME_PATTERNS['social_network'].format(YEAR=year)
-    
-    # Fallback: check link domain
-    if entry.link:
-        link_lower = entry.link.lower()
-        is_social_network = any(domain in link_lower for domain in SOCIAL_NETWORK_DOMAINS)
-        if is_social_network:
-            return TABLE_NAME_PATTERNS['social_network'].format(YEAR=year)
-    
-    # Default: media table
+
     return TABLE_NAME_PATTERNS['media'].format(YEAR=year)
 
 
+def _extract_netloc(link: str) -> str:
+    """Return the bare hostname (lowercase, no www.) from a URL."""
+    try:
+        from urllib.parse import urlparse
+        netloc = urlparse(link).netloc.lower()
+        if netloc.startswith('www.'):
+            netloc = netloc[4:]
+        return netloc
+    except Exception:
+        return link.lower()
+
+
 def detect_social_network_from_link(link: str) -> str:
-    """Detect social network name from link (for dropdown)."""
-    link_lower = link.lower()
+    """Detect social network name from link (for dropdown).
+
+    Uses proper hostname comparison instead of substring matching so that
+    domains like 'interfax.com.ua' are never confused with 'x.com'.
+    """
+    netloc = _extract_netloc(link)
     for domain, network_name in DOMAIN_TO_SOCIAL_NETWORK.items():
-        if domain in link_lower:
+        # exact match OR subdomain (e.g. m.facebook.com → facebook.com)
+        if netloc == domain or netloc.endswith('.' + domain):
             return network_name
-    return ''  # Empty if not a recognized social network
+    return ''
 

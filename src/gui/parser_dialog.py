@@ -1,10 +1,19 @@
 """Parsing dialog with preview and error handling."""
 import asyncio
+import base64
 import logging
 from collections import defaultdict
 from datetime import date, timedelta
 from pathlib import Path
 from typing import List, Optional, Dict
+
+# Inline SVG checkmark — works in both dev and frozen .exe (no file path needed)
+_CHECKMARK_SVG = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 18">'
+    b'<polyline points="3,9 7,13 15,5" stroke="white" stroke-width="2.5" '
+    b'fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+)
+_CHECKMARK_URI = "data:image/svg+xml;base64," + base64.b64encode(_CHECKMARK_SVG).decode()
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
@@ -311,7 +320,7 @@ def _make_table_pill(
         QCheckBox::indicator:checked {{
             background-color: {cb_checked};
             border-color: {cb_checked};
-            image: url({(Path(__file__).parent / 'checkmark.svg').as_posix()});
+            image: url("{_CHECKMARK_URI}");
         }}
         QCheckBox::indicator:checked:hover {{
             background-color: {cb_checked_h};
@@ -921,10 +930,17 @@ class ParserDialog(QDialog):
                 item.setToolTip(entry.description or '')
             self.entries_table.setItem(row, col, item)
 
-        # Col 2: Social Network dropdown
-        self.entries_table.setCellWidget(
-            row, 2, self._make_combo(SOCIAL_NETWORK_OPTIONS, entry.social_network or '')
-        )
+        # Col 2: Social Network — combo for Соцмережі, plain dash for ЗМІ
+        is_media_table = 'змі' in table_name.lower() or 'зми' in table_name.lower()
+        if is_media_table:
+            _sn_item = QTableWidgetItem('—')
+            _sn_item.setFlags(_sn_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            _sn_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.entries_table.setItem(row, 2, _sn_item)
+        else:
+            self.entries_table.setCellWidget(
+                row, 2, self._make_combo(SOCIAL_NETWORK_OPTIONS, entry.social_network or '')
+            )
         # Col 3: Tag dropdown
         self.entries_table.setCellWidget(
             row, 3, self._make_combo(TAG_OPTIONS, entry.tag or '')
@@ -1008,14 +1024,23 @@ class ParserDialog(QDialog):
 
     def _get_edited_entries(self) -> List[ParsedEntry]:
         """Return entries with social_network and tag updated from dropdown widgets."""
+        import dataclasses
         edited = []
         for row_idx, entry in enumerate(self.entries):
             social_combo = self.entries_table.cellWidget(row_idx, 2)
             tag_combo    = self.entries_table.cellWidget(row_idx, 3)
-            import dataclasses
+
+            # For ЗМІ entries there is no Social Network column — keep it empty
+            table_item = self.entries_table.item(row_idx, 0)
+            tname = table_item.text() if table_item else (entry.table_name or '')
+            is_media = 'змі' in tname.lower() or 'зми' in tname.lower()
+
+            sn = '' if is_media else (
+                social_combo.currentText() if social_combo else entry.social_network
+            )
             updated = dataclasses.replace(
                 entry,
-                social_network=social_combo.currentText() if social_combo else entry.social_network,
+                social_network=sn,
                 tag=tag_combo.currentText() if tag_combo else entry.tag,
             )
             edited.append(updated)
